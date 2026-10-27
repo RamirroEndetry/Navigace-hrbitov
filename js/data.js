@@ -24,8 +24,7 @@
   const M_PER_UNIT = 0.1;
   const W = V.w, H = V.h;
   const GATES = {
-    // via: pevný vstupní koridor od brány (kolem zábradlí prostranství před budovou až na střed hlavní aleje)
-    main: { x: 278, y: 1717, label: 'Hlavní vchod', short: 'hlavním vchodem', btn: 'Hlavní', via: [[375, 1685], [431, 1855], [664, 1777], [904, 1715]], viaExit: 1 },
+    main: { x: 278, y: 1717, label: 'Hlavní vchod', short: 'hlavním vchodem', btn: 'Hlavní' },
     north: { x: 735, y: 1215, label: 'Severní vchod', short: 'severním vchodem', btn: 'Severní' },
     east: { x: 3334, y: 1790, label: 'Východní branka', short: 'východní brankou', btn: 'Východní' }
   };
@@ -310,20 +309,160 @@
     return bd < 260 ? best : null;
   }
 
-  // ---------- Síť os cest (graf) ----------
-  // Hlavní část trasy vede středem cest po této síti; jen poslední úsek k hrobu jde uličkou mezi hroby.
-  const NET = { nodes: V.net.nodes.map(([x, y]) => ({ x, y, adj: [] })), edges: [] };
-  V.net.edges.forEach(([a, b, w, flat], i) => {
-    const pts = [];
-    for (let k = 0; k < flat.length; k += 2) pts.push({ x: flat[k], y: flat[k + 1] });
-    const cum = [0];
-    for (let k = 1; k < pts.length; k++) cum.push(cum[k - 1] + dist(pts[k - 1], pts[k]));
-    const len = cum[cum.length - 1];
-    // úzké pásky mezi hroby jen v nouzi, hlavní aleje mírně preferovat
-    const wf = w < 15 ? 3 : w < 25 ? 1.15 : 1;
-    NET.edges.push({ a, b, w, pts, cum, len, wf });
-    NET.nodes[a].adj.push(i); NET.nodes[b].adj.push(i);
-  });
+  // ---------- Síť cest (graf) ----------
+  // Trasa vede výhradně po této síti: osy cest narovnané na rovné úseky středem cesty.
+  // Jen poslední krátký úsek k hrobu vede uličkou mezi hroby.
+  //
+  // Ruční úpravy sítě (souřadnice v dm, viz data/vitkovice.js):
+  //  - remove: oblasti, kde automatická osa nedává smysl (terasa pod budovou u hlavní brány)
+  //  - add:    skutečné průchody po prostranství (rozcestí u brány → cesta k jihu → kolem terasy na hlavní alej)
+  const NET_FIX = {
+    remove: [[[330, 1650], [660, 1650], [660, 1850], [330, 1850]]],
+    add: [
+      [[368, 1668], [412, 1870]],
+      [[412, 1870], [521, 1822], [612, 1789]]
+    ]
+  };
+
+  const NET = { nodes: [], edges: [] };
+  const GATE_NODE = {};
+  let netReady = false;
+
+  function inPoly(poly, x, y) {
+    let c = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const [xi, yi] = poly[i], [xj, yj] = poly[j];
+      if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) c = !c;
+    }
+    return c;
+  }
+  function measure(e) {
+    e.cum = [0];
+    for (let k = 1; k < e.pts.length; k++) e.cum.push(e.cum[k - 1] + dist(e.pts[k - 1], e.pts[k]));
+    e.len = e.cum[e.cum.length - 1];
+  }
+  function addNode(x, y) { NET.nodes.push({ x, y, adj: [] }); return NET.nodes.length - 1; }
+  function nodeAt(x, y, snap) {
+    let best = -1, bd = snap;
+    NET.nodes.forEach((n, i) => { if (!n.adj.length) return; const d = Math.hypot(n.x - x, n.y - y); if (d < bd) { bd = d; best = i; } });
+    return best >= 0 ? best : addNode(x, y);
+  }
+  function addEdge(a, b, pts, w) {
+    const e = { a, b, w, pts, wf: w < 15 ? 3 : w < 25 ? 1.15 : 1 };
+    measure(e);
+    NET.edges.push(e);
+    NET.nodes[a].adj.push(NET.edges.length - 1); NET.nodes[b].adj.push(NET.edges.length - 1);
+    return e;
+  }
+  // rovný úsek nesmí vést přes hrob, budovu ani zeď
+  function clearSeg(a, b, skipStart) {
+    const n = Math.ceil(dist(a, b) / 1.5);
+    for (let s = skipStart ? 2 : 1; s < n; s++) {
+      const x = a.x + (b.x - a.x) * s / n, y = a.y + (b.y - a.y) * s / n;
+      if (!cost[Math.floor(y / R) * GW + Math.floor(x / R)]) return false;
+    }
+    return true;
+  }
+  // Douglas–Peucker s kontrolou překážek: zůstanou jen skutečné zlomy cesty
+  function straightLine(pts, tol) {
+    if (pts.length < 3) return pts.slice();
+    const keep = new Uint8Array(pts.length); keep[0] = keep[pts.length - 1] = 1;
+    const stack = [[0, pts.length - 1]];
+    while (stack.length) {
+      const [i, j] = stack.pop();
+      if (j - i < 2) continue;
+      const a = pts[i], b = pts[j], L = dist(a, b) || 1;
+      let md = -1, mk = -1;
+      for (let k = i + 1; k < j; k++) {
+        const d = Math.abs((b.x - a.x) * (a.y - pts[k].y) - (a.x - pts[k].x) * (b.y - a.y)) / L;
+        if (d > md) { md = d; mk = k; }
+      }
+      if (md > tol || !clearSeg(a, b)) { keep[mk] = 1; stack.push([i, mk], [mk, j]); }
+    }
+    const out = pts.filter((_, i) => keep[i]);
+    // téměř rovné zlomy (pod 10°) sloučit
+    for (let i = 1; i < out.length - 1;) {
+      const p = out[i - 1], q = out[i], r = out[i + 1];
+      const t = Math.abs(Math.atan2((q.x - p.x) * (r.y - q.y) - (q.y - p.y) * (r.x - q.x), (q.x - p.x) * (r.x - q.x) + (q.y - p.y) * (r.y - q.y)));
+      if (t < 0.17 && clearSeg(p, r)) out.splice(i, 1); else i++;
+    }
+    return out;
+  }
+
+  function prepNet() {
+    if (netReady) return;
+    if (!cost) buildGrid();
+    V.net.nodes.forEach(([x, y]) => addNode(x, y));
+    for (const [a, b, w, flat] of V.net.edges) {
+      const pts = [];
+      for (let k = 0; k < flat.length; k += 2) pts.push({ x: flat[k], y: flat[k + 1] });
+      const mid = pts[Math.floor(pts.length / 2)];
+      if (NET_FIX.remove.some((poly) => inPoly(poly, mid.x, mid.y))) continue;
+      addEdge(a, b, pts, w);
+    }
+    for (const line of NET_FIX.add) {
+      const pts = line.map(([x, y]) => ({ x, y }));
+      const a = nodeAt(pts[0].x, pts[0].y, 60), b = nodeAt(pts[pts.length - 1].x, pts[pts.length - 1].y, 60);
+      pts[0] = { x: NET.nodes[a].x, y: NET.nodes[a].y }; pts[pts.length - 1] = { x: NET.nodes[b].x, y: NET.nodes[b].y };
+      addEdge(a, b, pts, 40);
+    }
+    // shluky uzlů na širokých křižovatkách (do 5 m od sebe) sloučit do jednoho středu křižovatky
+    const parent = NET.nodes.map((_, i) => i);
+    const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+    for (const e of NET.edges) if (e.len < 50) parent[find(e.a)] = find(e.b);
+    const groups = {};
+    NET.nodes.forEach((n, i) => { if (n.adj.length) (groups[find(i)] = groups[find(i)] || []).push(i); });
+    for (const [root, members] of Object.entries(groups)) {
+      if (members.length < 2) continue;
+      const cx = members.reduce((s, i) => s + NET.nodes[i].x, 0) / members.length, cy = members.reduce((s, i) => s + NET.nodes[i].y, 0) / members.length;
+      NET.nodes[root].x = cx; NET.nodes[root].y = cy;
+    }
+    const kept = [];
+    for (const e of NET.edges) {
+      const a = find(e.a), b = find(e.b);
+      if (a === b) continue;
+      e.a = a; e.b = b;
+      e.pts[0] = { x: NET.nodes[a].x, y: NET.nodes[a].y };
+      e.pts[e.pts.length - 1] = { x: NET.nodes[b].x, y: NET.nodes[b].y };
+      measure(e); kept.push(e);
+    }
+    NET.edges = kept;
+    NET.nodes.forEach((n) => (n.adj = []));
+    NET.edges.forEach((e, i) => { NET.nodes[e.a].adj.push(i); NET.nodes[e.b].adj.push(i); });
+    // narovnat všechny cesty: rovné úseky středem cesty (odchylka max. 1,2 m)
+    for (const e of NET.edges) { e.pts = straightLine(e.pts, 12); measure(e); }
+    // brány: vlastní uzel s rovnou spojnicí kolmo na nejbližší místo cesty (cesta se tam rozdělí)
+    for (const [key, gt] of Object.entries(GATES)) {
+      let best = null;
+      NET.edges.forEach((e, ei) => {
+        for (let k = 1; k < e.pts.length; k++) {
+          const a = e.pts[k - 1], b = e.pts[k], L2 = (b.x - a.x) ** 2 + (b.y - a.y) ** 2 || 1;
+          const t = Math.max(0, Math.min(1, ((gt.x - a.x) * (b.x - a.x) + (gt.y - a.y) * (b.y - a.y)) / L2));
+          const p = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }, d = dist(p, gt);
+          if ((!best || d < best.d) && clearSeg(gt, p, true)) best = { ei, k, p, d, off: e.cum[k - 1] + t * Math.sqrt(L2) };
+        }
+      });
+      const gn = addNode(gt.x, gt.y);
+      GATE_NODE[key] = gn;
+      if (!best) continue;
+      const e = NET.edges[best.ei];
+      let pn;
+      if (best.off < 30) pn = e.a;
+      else if (e.len - best.off < 30) pn = e.b;
+      else {
+        // rozdělit hranu v bodě napojení
+        pn = addNode(best.p.x, best.p.y);
+        const first = [...e.pts.slice(0, best.k), best.p], second = [best.p, ...e.pts.slice(best.k)];
+        const oldB = e.b;
+        NET.nodes[oldB].adj = NET.nodes[oldB].adj.filter((i) => i !== best.ei);
+        e.b = pn; e.pts = first; measure(e);
+        NET.nodes[pn].adj.push(best.ei);
+        addEdge(pn, oldB, second, e.w);
+      }
+      addEdge(gn, pn, [{ x: gt.x, y: gt.y }, { x: NET.nodes[pn].x, y: NET.nodes[pn].y }], 40);
+    }
+    netReady = true;
+  }
   function pointAt(e, off) {
     off = Math.max(0, Math.min(e.len, off));
     let k = 1;
@@ -342,6 +481,7 @@
   // buňky mřížky ležící na ose cesty -> (hrana, offset)
   let netCell = null, netOff = null;
   function rasterNet() {
+    prepNet();
     netCell = new Int32Array(GW * GH); netOff = new Float32Array(GW * GH);
     NET.edges.forEach((e, ei) => {
       for (let off = 0; off <= e.len; off += 1.5) {
@@ -394,7 +534,7 @@
     return { s, cands: kept };
   }
 
-  const endCache = {}, startCache = {};
+  const endCache = {};
   function graveEnd(g) {
     if (!endCache[g.id]) {
       let a = attach(g.cx, g.cy, 260);
@@ -405,67 +545,25 @@
     return endCache[g.id];
   }
 
-  // Douglas–Peucker (jen pro textové pokyny)
-  function simplify(pts, tol) {
-    if (pts.length < 3) return pts.slice();
-    const keep = new Uint8Array(pts.length); keep[0] = keep[pts.length - 1] = 1;
-    const stack = [[0, pts.length - 1]];
-    while (stack.length) {
-      const [i, j] = stack.pop();
-      const a = pts[i], b = pts[j], L = Math.hypot(b.x - a.x, b.y - a.y) || 1;
-      let md = 0, mk = -1;
-      for (let k = i + 1; k < j; k++) {
-        const d = Math.abs((b.x - a.x) * (a.y - pts[k].y) - (a.x - pts[k].x) * (b.y - a.y)) / L;
-        if (d > md) { md = d; mk = k; }
-      }
-      if (md > tol) { keep[mk] = 1; stack.push([i, mk], [mk, j]); }
-    }
-    return pts.filter((_, i) => keep[i]);
-  }
   function dedupe(pts) {
     const out = [];
     for (const p of pts) if (!out.length || dist(out[out.length - 1], p) > 0.5) out.push(p);
     return out;
   }
+  const angDiff = (a, b) => { let d = b - a; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; return d; };
+  const heading = (p, q) => Math.atan2(q.y - p.y, q.x - p.x);
 
-  // Narovnání čáry pro vykreslení: jen skutečné zlomy (tolerance 2 m),
-  // ale rovný úsek nesmí vést přes hrob, budovu ani zeď – jinak se zlom ponechá.
-  function clearSeg(a, b) {
-    const n = Math.ceil(dist(a, b) / 1.5);
-    for (let s = 1; s < n; s++) {
-      const x = a.x + (b.x - a.x) * s / n, y = a.y + (b.y - a.y) * s / n;
-      if (!cost[Math.floor(y / R) * GW + Math.floor(x / R)]) return false;
-    }
-    return true;
-  }
-  function straighten(pts, fixed) {
-    if (pts.length < 3) return pts.slice();
-    // poslední bod leží na obrysu hrobu – ten úsek neověřovat
-    const body = pts.slice(0, -1);
-    const keep = new Uint8Array(body.length); keep[0] = keep[body.length - 1] = 1;
-    // pevné body (vstupní koridor) se nikdy neslučují
-    const fx = Math.min(fixed || 0, body.length - 1);
-    for (let i = 0; i <= fx; i++) keep[i] = 1;
-    const stack = [[fx, body.length - 1]];
-    while (stack.length) {
-      const [i, j] = stack.pop();
-      if (j - i < 2) continue;
-      const a = body[i], b = body[j], L = dist(a, b) || 1;
-      let md = -1, mk = -1;
-      for (let k = i + 1; k < j; k++) {
-        const d = Math.abs((b.x - a.x) * (a.y - body[k].y) - (a.x - body[k].x) * (b.y - a.y)) / L;
-        if (d > md) { md = d; mk = k; }
+  // odstranit „hroty“ (krátké návraty tam a zpět na křižovatkách), pokud je přímá spojnice volná
+  function despike(pts) {
+    const out = pts.slice();
+    for (let changed = true; changed;) {
+      changed = false;
+      for (let i = 1; i < out.length - 1; i++) {
+        const a = out[i - 1], b = out[i], c = out[i + 1];
+        const t = Math.abs(angDiff(heading(a, b), heading(b, c)));
+        if (t > 2.0 && Math.min(dist(a, b), dist(b, c)) < 80 && clearSeg(a, c, i === 1)) { out.splice(i, 1); changed = true; break; }
       }
-      if (md > 20 || !clearSeg(a, b)) { keep[mk] = 1; stack.push([i, mk], [mk, j]); }
     }
-    const out = body.filter((_, i) => keep[i]);
-    // téměř rovné zlomy (pod 12°) sloučit, pokud zkratka nevede přes překážku
-    for (let i = Math.max(1, fx + 1); i < out.length - 1;) {
-      const p = out[i - 1], q = out[i], r = out[i + 1];
-      const t = Math.abs(Math.atan2((q.x - p.x) * (r.y - q.y) - (q.y - p.y) * (r.x - q.x), (q.x - p.x) * (r.x - q.x) + (q.y - p.y) * (r.y - q.y)));
-      if (t < 0.21 && clearSeg(p, r)) out.splice(i, 1); else i++;
-    }
-    out.push(pts[pts.length - 1]);
     return out;
   }
 
@@ -483,38 +581,27 @@
   }
 
   function routeFrom(graveId, startKey, gate) {
-    if (!cost) buildGrid();
+    prepNet();
+    if (!netCell) rasterNet();
     const g = graveById[graveId];
     const end = graveEnd(g);
+    const fallback = { ok: false, gate: startKey, u: Infinity, pts: [{ x: gate.x, y: gate.y }, { x: g.cx, y: g.cy }], draw: [{ x: gate.x, y: gate.y }, { x: g.cx, y: g.cy }], steps: [{ kind: 'finish', text: 'Trasu se nepodařilo spočítat' }], m: 0, min: 0 };
+    if (!end || !end.cands.length) return fallback;
 
-    // --- napojení startu na síť ---
-    // vchod i GPS: volný průchod po zpevněné ploše (např. přes prostranství) až na osu cesty
-    // vstupní koridor: povinný úvod (do bodu viaExit), dál lze z koridoru odbočit v kterémkoli jeho bodě
-    const corridor = (gate.via || []).map(([x, y]) => ({ x, y }));
-    let starts = startCache[startKey];
-    if (!starts) {
-      starts = [];
-      const exits = corridor.length ? corridor.map((p, i) => i).filter((i) => i >= (gate.viaExit || 0)) : [-1];
-      for (const i of exits) {
-        const from = i < 0 ? gate : corridor[i];
-        let pre = 0;
-        for (let k = 0, p = gate; k <= i; p = corridor[k++]) pre += dist(p, corridor[k]);
-        const sa = attach(from.x, from.y, 500, corridor.length ? 60 : 250);
-        if (sa) for (const c of sa.cands) starts.push({ e: c.e, off: c.off, gd: c.gd + pre, chain: c.chain, via: i < 0 ? [] : corridor.slice(0, i + 1) });
-      }
-      if (startKey !== 'gps') startCache[startKey] = starts;
-    }
-    const fallback = { ok: false, gate: startKey, u: Infinity, pts: [{ x: gate.x, y: gate.y }, { x: g.cx, y: g.cy }], steps: [{ kind: 'finish', text: 'Trasu se nepodařilo spočítat' }], m: 0, min: 0 };
-    if (!end || !end.cands.length || !starts.length) return fallback;
-
-    // --- Dijkstra po síti (více zdrojů) ---
+    // --- start: brána je uzel sítě; GPS se na síť napojí nejbližším průchodem ---
     const N = NET.nodes.length, D = new Float64Array(N).fill(Infinity), prev = new Int32Array(N).fill(-1), via = new Int32Array(N).fill(-1), src = new Int32Array(N).fill(-1);
-    starts.forEach((s, si) => {
-      const e = NET.edges[s.e];
-      for (const [node, d] of [[e.a, s.gd + s.off * e.wf], [e.b, s.gd + (e.len - s.off) * e.wf]]) {
-        if (d < D[node]) { D[node] = d; src[node] = si; prev[node] = -1; via[node] = s.e; }
-      }
-    });
+    let starts = [];
+    if (startKey === 'gps') {
+      const a = attach(gate.x, gate.y, 300);
+      if (a) starts = a.cands.map((c) => ({ e: c.e, off: c.off, gd: c.gd, chain: c.chain }));
+      if (!starts.length) return fallback;
+      starts.forEach((s, si) => {
+        const e = NET.edges[s.e];
+        for (const [node, d] of [[e.a, s.gd + s.off * e.wf], [e.b, s.gd + (e.len - s.off) * e.wf]]) if (d < D[node]) { D[node] = d; src[node] = si; via[node] = s.e; }
+      });
+    } else {
+      D[GATE_NODE[startKey]] = 0;
+    }
     const done = new Uint8Array(N);
     for (;;) {
       let u = -1;
@@ -540,67 +627,69 @@
       }
     }
     if ((!best || !isFinite(best.tot)) && !end.wide) {
-      // hrob se napojil jen na izolovaný kousek sítě – hledat napojení dál
       endCache[g.id] = Object.assign(attach(g.cx, g.cy, 2500, 400) || { cands: [] }, { wide: true });
       return routeFrom(graveId, startKey, gate);
     }
     if (!best || !isFinite(best.tot)) return fallback;
 
-    // --- sestavení geometrie ---
+    // --- geometrie: start → po síti → místo odbočení ---
     const { c, o } = best;
     const ce = NET.edges[c.e];
-    let net, start;
+    let head;
     if (o.same != null) {
-      start = starts[o.same];
-      net = slice(ce, start.off, c.off);
+      const s = starts[o.same];
+      head = [{ x: gate.x, y: gate.y }, ...straightLine(dedupe(smooth(s.chain.slice().reverse()).map(toPt)), 8), ...slice(ce, s.off, c.off)];
     } else {
       const chainN = [];
-      for (let n = o.node; n !== -1; n = prev[n]) chainN.unshift(n);
-      start = starts[src[chainN[0]]];
-      const se = NET.edges[via[chainN[0]]];
-      net = slice(se, start.off, chainN[0] === se.a ? 0 : se.len);
+      for (let n = o.node; n !== -1 && n !== undefined; n = prev[n]) { chainN.unshift(n); if (prev[n] === -1) break; }
+      head = [];
+      if (startKey === 'gps') {
+        const s = starts[src[chainN[0]]], se = NET.edges[s.e];
+        head.push({ x: gate.x, y: gate.y }, ...straightLine(dedupe(smooth(s.chain.slice().reverse()).map(toPt)), 8));
+        head.push(...slice(se, s.off, chainN[0] === se.a ? 0 : se.len));
+      } else {
+        head.push({ x: NET.nodes[chainN[0]].x, y: NET.nodes[chainN[0]].y });
+      }
       for (let k = 1; k < chainN.length; k++) {
         const e = NET.edges[via[chainN[k]]];
-        const seg = e.a === chainN[k - 1] ? e.pts : e.pts.slice().reverse();
-        net.push(...seg.slice(1));
+        head.push(...(e.a === chainN[k - 1] ? e.pts : e.pts.slice().reverse()).slice(1));
       }
-      net.push(...slice(ce, o.node === ce.a ? 0 : ce.len, c.off).slice(1));
+      head.push(...slice(ce, o.node === ce.a ? 0 : ce.len, c.off).slice(1));
     }
-    // poslední úsek: z cesty uličkou k hrobu (vyhlazená cesta po mřížce)
-    const lastLeg = smooth(c.chain).map(toPt);
-    const lp = lastLeg[lastLeg.length - 1];
+    head = despike(dedupe(head));
+    // poslední úsek: z osy cesty rovně uličkou k hrobu
+    const leg = straightLine(dedupe([head[head.length - 1], ...smooth(c.chain).map(toPt)]), 8);
+    const lp = leg[leg.length - 1];
     let ex = g.cx, ey = g.cy, ed = Infinity;
     for (let i = 0; i < g.ring.length; i += 2) {
       const d = Math.hypot(g.ring[i] - lp.x, g.ring[i + 1] - lp.y);
       if (d < ed) { ed = d; ex = g.ring[i]; ey = g.ring[i + 1]; }
     }
-    if (!start.lead) start.lead = [{ x: gate.x, y: gate.y }, ...start.via, ...smooth(start.chain.slice().reverse()).map(toPt)];
-    const head = dedupe([...start.lead, ...net]);
-    const pts = dedupe([...head, ...lastLeg, { x: ex, y: ey }]);
+    const pts = despike(dedupe([...head, ...leg.slice(1), { x: ex, y: ey }]));
+    // čistá čára: rovné úseky, zlomy jen v zatáčkách (téměř rovné zlomy sloučit)
+    const draw = pts.slice();
+    for (let i = 1; i < draw.length - 2;) {
+      const t = Math.abs(angDiff(heading(draw[i - 1], draw[i]), heading(draw[i], draw[i + 1])));
+      if (t < 0.17 && clearSeg(draw[i - 1], draw[i + 1])) draw.splice(i, 1); else i++;
+    }
     let total = 0;
     for (let i = 1; i < pts.length; i++) total += dist(pts[i - 1], pts[i]);
 
-    // --- pokyny podle sítě cest ---
-    // úseky mezi zlomy; krátké úseky (do 12 m) se slučují a rozhoduje celková změna směru
-    const sp = simplify(head, 20);
-    const hd = (p, q) => Math.atan2(q.y - p.y, q.x - p.x);
-    let legs = [];
-    for (let i = 1; i < sp.length; i++) {
-      const u = dist(sp[i - 1], sp[i]), h = hd(sp[i - 1], sp[i]);
-      const last = legs[legs.length - 1];
-      if (last) { let dh = h - last.h1; while (dh > Math.PI) dh -= 2 * Math.PI; while (dh < -Math.PI) dh += 2 * Math.PI; if (Math.abs(dh) < 0.7) { last.u += u; last.h1 = h; continue; } }
-      legs.push({ u, h0: h, h1: h, at: sp[i - 1] });
+    // --- pokyny: úseky mezi zatáčkami; krátké úseky do 12 m se slučují podle celkové změny směru ---
+    const legs = [];
+    for (let i = 1; i < head.length; i++) {
+      const u = dist(head[i - 1], head[i]);
+      if (u < 1) continue;
+      const h = heading(head[i - 1], head[i]), last = legs[legs.length - 1];
+      if (last && Math.abs(angDiff(last.h1, h)) < 0.7) { last.u += u; last.h1 = h; continue; }
+      legs.push({ u, h0: h, h1: h, at: head[i - 1] });
     }
     for (let changed = true; changed;) {
       changed = false;
       for (let i = 1; i < legs.length; i++) {
-        if (legs[i].u >= 120 || legs.length < 2) continue;
-        // poslední úsek s ostrou zatáčkou (např. odbočka na boční cestičku) ponechat
-        if (i === legs.length - 1 && legs[i].u >= 40) {
-          let dh = legs[i].h0 - legs[i - 1].h1; while (dh > Math.PI) dh -= 2 * Math.PI; while (dh < -Math.PI) dh += 2 * Math.PI;
-          if (Math.abs(dh) > 1.0) continue;
-        }
-        if (i < legs.length - 1) { legs[i + 1].u += legs[i].u; legs[i + 1].h0 = legs[i + 1].h0; legs[i + 1].at = legs[i].at; legs[i + 1].fromH = legs[i - 1].h1; }
+        if (legs[i].u >= 120) continue;
+        if (i === legs.length - 1 && legs[i].u >= 40 && Math.abs(angDiff(legs[i - 1].h1, legs[i].h0)) > 1.0) continue;
+        if (i < legs.length - 1) { legs[i + 1].u += legs[i].u; legs[i + 1].at = legs[i].at; legs[i + 1].fromH = legs[i - 1].h1; }
         else legs[i - 1].u += legs[i].u;
         legs.splice(i, 1); changed = true; break;
       }
@@ -608,8 +697,7 @@
     const steps = [{ kind: 'start', text: startKey === 'gps' ? 'Vyjděte od místa, kde stojíte' : `Vstupte ${gate.short}` }];
     legs.forEach((l, i) => {
       const m = roundM(meters(l.u));
-      let dh = i ? l.h0 - (l.fromH != null ? l.fromH : legs[i - 1].h1) : 0;
-      while (dh > Math.PI) dh -= 2 * Math.PI; while (dh < -Math.PI) dh += 2 * Math.PI;
+      const dh = i ? angDiff(l.fromH != null ? l.fromH : legs[i - 1].h1, l.h0) : 0;
       const prevStep = steps[steps.length - 1];
       if (Math.abs(dh) < 0.6) {
         if (prevStep.kind === 'straight') prevStep.m = roundM(prevStep.m + m);
@@ -617,27 +705,29 @@
         return;
       }
       const dir = dh > 0 ? 'right' : 'left', side = dir === 'right' ? 'vpravo' : 'vlevo';
-      const verb = Math.abs(dh) > 2.6 ? 'Otočte se' : Math.abs(dh) > 1.0 ? `Odbočte ${side}` : `Držte se ${side}`;
-      const L = l.u || 1, ahead = { x: l.at.x + Math.cos(l.h0) * Math.min(80, L), y: l.at.y + Math.sin(l.h0) * Math.min(80, L) };
+      const verb = Math.abs(dh) > 1.0 ? `Odbočte ${side}` : `Držte se ${side}`;
+      const ahead = { x: l.at.x + Math.cos(l.h0) * Math.min(80, l.u), y: l.at.y + Math.sin(l.h0) * Math.min(80, l.u) };
       const sec = nearestSection(ahead.x, ahead.y);
       steps.push({ kind: dir, text: sec ? `${verb} k sekci ${sec.id}` : verb, m });
     });
+    // zbytečné kroky „rovně 1–2 m“ vynechat
+    for (let i = steps.length - 1; i > 0; i--) if (steps[i].kind === 'straight' && steps[i].m < 3) steps.splice(i, 1);
     // odbočka z cesty do uličky mezi hroby
     let legLen = 0;
-    for (let i = 1; i < lastLeg.length; i++) legLen += dist(lastLeg[i - 1], lastLeg[i]);
+    for (let i = 1; i < leg.length; i++) legLen += dist(leg[i - 1], leg[i]);
     const hp = head[head.length - 1], hq = head[Math.max(0, head.length - 2)];
     const into = legLen > 25;
     if (into) {
-      const q = lastLeg[1] || lastLeg[0];
+      const q = leg[1] || leg[0];
       const cr = (hp.x - hq.x) * (q.y - hp.y) - (hp.y - hq.y) * (q.x - hp.x);
       steps.push({ kind: cr > 0 ? 'right' : 'left', text: `Odbočte ${cr > 0 ? 'vpravo' : 'vlevo'} mezi hroby`, m: roundM(meters(legLen)) });
     }
-    const la = into ? lastLeg[Math.max(0, lastLeg.length - 2)] : hq, lb = into ? lastLeg[lastLeg.length - 1] : hp;
+    const la = into ? leg[Math.max(0, leg.length - 2)] : hq, lb = into ? leg[leg.length - 1] : hp;
     const cr = (lb.x - la.x) * (g.cy - lb.y) - (lb.y - la.y) * (g.cx - lb.x);
     const sideTxt = into && ed < 12 ? 'přímo před vámi' : cr > 0 ? 'po vaší pravé straně' : 'po vaší levé straně';
     steps.push({ kind: 'finish', text: `Hrob ${g.num} v sekci ${g.sec} je ${sideTxt}` });
     const m = roundM(meters(total));
-    return { ok: true, gate: startKey, u: best.tot, pts, draw: straighten(pts, start.via.length), steps, m, min: Math.max(1, Math.round(m / 70)), split: head.length };
+    return { ok: true, gate: startKey, u: best.tot, pts, draw, steps, m, min: Math.max(1, Math.round(m / 70)) };
   }
 
   // ---------- Pohřby (relativně k dnešku) ----------
@@ -680,6 +770,6 @@
     W, H, GATES, M_PER_UNIT, V,
     sections, secById, secOrder, graves, persons, graveById, byGrave, trees, pois, funerals, info,
     route, graveAt, gravesIn, hoursFor, norm, iso, fromSJTSK,
-    _grid: () => { if (!cost) buildGrid(); return { cost, GW, GH, R, nearestWalkable, astar }; }
+    _grid: () => { if (!cost) buildGrid(); prepNet(); return { cost, GW, GH, R, nearestWalkable, astar, NET, GATE_NODE }; }
   };
 })();

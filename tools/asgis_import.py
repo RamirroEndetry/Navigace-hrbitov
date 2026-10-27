@@ -321,7 +321,7 @@ def build(raw, out):
     # --- síť os cest (pro navigaci po středu cest) ---
     blockers = [shape(f["geometry"]) for f in load(raw, "v_platnost_hrob_platne")]
     for f in load(raw, "n_polohopis_pob"):
-        if AREA.get(int(f["properties"]["kod"])) in ("building", "monument", "wall"):
+        if AREA.get(int(f["properties"]["kod"])) in ("building", "monument", "wall", "shrub", "flower", "tech"):
             blockers.append(shape(f["geometry"]))
     net = build_network(paved, blockers, [Point(g[2], g[3]) for g in gates], T)
 
