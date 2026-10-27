@@ -15,8 +15,19 @@
   const yearOf = (isoStr) => +isoStr.slice(0, 4);
   const ageOf = (p) => { const b = new Date(p.born), d = new Date(p.died); let a = d.getFullYear() - b.getFullYear(); if (d.getMonth() < b.getMonth() || (d.getMonth() === b.getMonth() && d.getDate() < b.getDate())) a--; return a; };
   const plural = (n, one, few, many) => (n === 1 ? one : n >= 2 && n <= 4 ? few : many);
-  const graveCode = (g) => `${g.sec}-${g.row}-${g.num}`;
-  const TYPE = { hrob: 'Hrob', dvojhrob: 'Dvojhrob', hrobka: 'Hrobka', urna: 'Urnové místo' };
+  const graveCode = (g) => g.id;
+  const TYPE = { hrob: 'Hrob', dvojhrob: 'Dvojhrob', trojhrob: 'Trojhrob', vicehrob: 'Vícehrob', hrobka: 'Hrobka', urnovy: 'Urnový hrob', kolumbarium: 'Kolumbárium', vsyp: 'Vsypové místo' };
+  const SEC_IDS = D.sections.map((s) => s.id).sort((a, b) => b.length - a.length);
+  const hashFor = (g) => `#hrob=${encodeURIComponent(g.id)}${state.start !== 'main' ? '&start=' + state.start : ''}`;
+  // ukázkové dotazy z aktuálních dat
+  const EXAMPLES = (() => {
+    const cnt = {};
+    for (const p of D.persons) cnt[p.last] = (cnt[p.last] || 0) + 1;
+    const fem = Object.keys(cnt).filter((k) => /ová$/.test(k)).sort((a, b) => cnt[b] - cnt[a])[0];
+    const pp = D.persons.find((p) => p.last === 'Kaluža') || D.persons[Math.floor(D.persons.length / 3)];
+    const g = D.graves.find((x) => x.sec === 'XII' && x.status === 'obsazeno' && /^\d+$/.test(x.num)) || D.graves[0];
+    return [fem, `${pp.last} ${pp.died.slice(0, 4)}`, g.id, 'sekce XIX-O'];
+  })();
 
   const I = {
     back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>',
@@ -51,7 +62,7 @@
   if (KIOSK) document.documentElement.classList.add('kiosk');
   const state = {
     view: 'home', res: null, resLimit: 40, query: '', grave: null, route: null,
-    start: KIOSK ? 'main' : store.get('start', 'main'), from: null,
+    start: KIOSK || !D.GATES[store.get('start', 'main')] ? 'main' : store.get('start', 'main'), from: null,
     favs: store.get('favs', []), candles: store.get('candles', []), user: store.get('user', null),
     filters: { sec: '', from: '', to: '' }, sheet: 'min'
   };
@@ -72,7 +83,7 @@
 
   function insets() {
     const cw = window.innerWidth;
-    if (mobile()) return { left: 0, top: 70, right: 56, bottom: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sheet-h')) || 0 };
+    if (mobile()) return { left: 0, top: 120, right: 56, bottom: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sheet-h')) || 0 };
     const r = panel.getBoundingClientRect();
     return { left: Math.min(r.right + 4, cw * 0.6), top: 76, right: 70, bottom: 56 };
   }
@@ -86,7 +97,7 @@
     onPoi: openPoi
   });
   map.setCandles(state.candles);
-  if (KIOSK) map.youAreHere(true);
+  if (KIOSK) map.youAreHere({ x: D.GATES.main.x + 60, y: D.GATES.main.y - 40 });
 
   function updateScale(k) {
     const mpp = D.M_PER_UNIT / k;
@@ -103,23 +114,36 @@
     if (!g || mobile()) { tip.hidden = true; return; }
     const ps = D.byGrave[g.id];
     const title = g.status === 'volne' ? 'Volné hrobové místo' : ps.length ? (ps.length > 1 ? `Rodina ${familyName(ps)}` : `${ps[0].first} ${ps[0].last}`) : 'Hrobové místo';
-    tip.innerHTML = `<b>${esc(title)}</b><small>Odd. ${g.sec} · řada ${g.row} · hrob ${g.num}</small>`;
+    tip.innerHTML = `<b>${esc(title)}</b><small>Sekce ${g.sec} · řada ${g.row} · hrob ${g.num} · ${TYPE[g.type]}</small>`;
     tip.style.left = e.clientX + 'px'; tip.style.top = e.clientY + 'px';
     tip.hidden = false;
   }
   function familyName(ps) {
     const m = ps.find((p) => !p.sex);
-    return m ? (m.last.endsWith('ý') ? m.last.slice(0, -1) + 'ých' : m.last.endsWith('í') ? m.last : m.last + 'ových') : ps[0].last;
+    if (!m) return ps[0].last;
+    const l = m.last;
+    if (/ý$/.test(l)) return l.slice(0, -1) + 'ých';
+    if (/a$/.test(l)) return l.slice(0, -1) + 'ových';
+    if (/ek$/.test(l)) return l.slice(0, -2) + 'kových';
+    if (/ec$/.test(l)) return l.slice(0, -2) + 'cových';
+    if (/ski$/.test(l)) return l.slice(0, -1) + 'ých';
+    return l + 'ových';
   }
 
   // ---------- Vyhledávání ----------
   function parseQuery(raw) {
     const out = { tokens: [], years: [], date: null, grave: null, label: [] };
     let s = norm(raw.trim());
-    const gm = s.match(/^(?:odd(?:eleni)?\.?\s*)?([a-l])\s*[-/., ]?\s*(\d{1,2})(?:\s*[-/., ]\s*(\d{1,3}))?$/);
-    if (gm) { out.grave = { sec: gm[1].toUpperCase(), row: +gm[2], num: gm[3] ? +gm[3] : null }; return out; }
-    const sm = s.match(/^(?:oddeleni|odd\.?)\s*([a-l])$/);
-    if (sm) { out.grave = { sec: sm[1].toUpperCase(), row: null, num: null }; return out; }
+    // číslo hrobu: „XII-27-15“, „sekce XIX-A 16“, „UH 30“
+    const up = s.toUpperCase().replace(/^(SEKCE|SEK\.?|ODDELENI|ODD\.?)\s*/, '');
+    const sec = SEC_IDS.find((id) => up.startsWith(id) && (up.length === id.length || /[\s\-.,]/.test(up[id.length])));
+    if (sec) {
+      const rest = up.slice(sec.length).split(/[\s\-.,]+/).filter(Boolean);
+      if (rest.every((t) => /^\d+[A-Z]?(\/\d+)?$/.test(t)) && rest.length <= 2) {
+        out.grave = { sec, row: rest[0] || null, num: rest[1] || null };
+        return out;
+      }
+    }
     const dm = s.match(/(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})/);
     if (dm) { out.date = `${dm[3]}-${String(dm[2]).padStart(2, '0')}-${String(dm[1]).padStart(2, '0')}`; s = s.replace(dm[0], ' '); }
     s = s.replace(/\b(1[89]\d\d|20\d\d)\b/g, (y) => { out.years.push(+y); return ' '; });
@@ -137,8 +161,8 @@
     let res;
     if (pq.grave) {
       const g = pq.grave;
-      const graves = D.graves.filter((x) => x.sec === g.sec && (g.row == null || x.row === g.row) && (g.num == null || x.num === g.num));
-      res = { kind: 'graves', items: graves, desc: g.num ? `hrob ${g.sec}-${g.row}-${g.num}` : g.row ? `oddělení ${g.sec}, řada ${g.row}` : `oddělení ${g.sec}` };
+      const graves = D.graves.filter((x) => x.sec === g.sec && (g.row == null || x.row === g.row) && (g.num == null || x.num.toUpperCase() === g.num));
+      res = { kind: 'graves', items: graves, desc: g.num ? `hrob ${g.sec}-${g.row}-${g.num}` : g.row ? `sekce ${g.sec}, řada ${g.row}` : `sekce ${g.sec}` };
     } else {
       const fy = f.from ? +f.from : null, ty = f.to ? +f.to : null;
       const items = D.persons.filter((p) => {
@@ -169,6 +193,7 @@
     map.highlight(ids.size && ids.size < 400 ? ids : null);
     show('results');
     if (ids.size && ids.size <= 60) map.fitTo(ids);
+    if (res.kind === 'graves' && res.items.length === 1 && pq.grave.num) openGrave(res.items[0].id, { from: 'results' });
   }
 
   let tmr;
@@ -236,10 +261,7 @@
       <h1 class="display">Najděte místo,<br><em>kde vzpomínáte.</em></h1>
       <p class="lede">Vyhledejte hrob podle jména, data úmrtí nebo čísla hrobu. Mapa vás dovede až k němu, klidně i v telefonu.</p>
       <div class="examples"><span>Zkuste</span>
-        <button class="chip" data-act="example" data-q="Nováková">Nováková</button>
-        <button class="chip" data-act="example" data-q="Kaluža 1999">Kaluža 1999</button>
-        <button class="chip" data-act="example" data-q="C-2-5">C-2-5</button>
-        <button class="chip" data-act="example" data-q="oddělení K">oddělení K</button>
+        ${EXAMPLES.map((e) => `<button class="chip" data-act="example" data-q="${esc(e)}">${esc(e)}</button>`).join('')}
       </div>
       <div class="today ${open ? '' : 'closed'}"><span class="dot"></span><div>
         <b>${open ? `Otevřeno · zavírá v ${hrs.close}:00` : `Zavřeno · otevírá v ${hrs.open}:00`}</b>
@@ -251,7 +273,7 @@
         <button class="tile accent" data-act="view" data-v="ucet"><span class="ti">${I.star}</span><span><b>Výhody registrace</b><small>Moje hroby, upozornění</small></span></button>
         <button class="tile" data-act="view" data-v="panorama"><span class="ti">${I.pano}</span><span><b>Panorama 360°</b><small>Brzy · DigiDay</small></span></button>
       </div>
-      <p class="fine">Prototyp · demonstrační data · ${D.graves.length.toLocaleString('cs')} hrobových míst v ${D.sections.length} odděleních</p>`;
+      <p class="fine">Skutečný půdorys a ${D.graves.length.toLocaleString('cs')} hrobů v ${D.sections.length} sekcích (ASGIS, zaměření DIGIS 12/2025).<br>Jména zemřelých jsou v ukázce fiktivní.</p>`;
   }
 
   function vResults() {
@@ -286,7 +308,6 @@
         <button class="btn forest wide" data-act="interest">Mám zájem o pronájem</button>`;
     } else {
       people = `<div class="people">${ps.map((p) => `<div class="person"><div class="nm">${esc(p.first)} ${esc(p.last)}</div><div class="dt">* ${fmt(p.born)} &nbsp;† ${fmt(p.died)} · ${ageOf(p)} let</div></div>`).join('')}</div>`;
-      if (g.status === 'obnova') people += `<span class="badge renew">Nájem skončil · místo čeká na obnovu</span>`;
     }
     const leaseCell = state.user
       ? `<b>${g.lease ? 'do ' + fmt(g.lease) : '—'}</b>`
@@ -294,7 +315,7 @@
     return `
       <button class="back" data-act="back">${I.back}${backLbl}</button>
       <div class="eyebrow">Hrobové místo ${graveCode(g)}</div>
-      <div class="loc-strip"><span>Oddělení <b>${g.sec}</b></span><span>Řada <b>${g.row}</b></span><span>Hrob <b>${g.num}</b></span></div>
+      <div class="loc-strip"><span>Sekce <b>${g.sec}</b></span><span>Řada <b>${g.row}</b></span><span>Hrob <b>${g.num}</b></span></div>
       ${people}
       <div class="actions">
         ${mobile() && !KIOSK
@@ -307,8 +328,7 @@
         <div class="route-top">
           <div class="route-sum"><b>${r.m} m</b><span>≈ ${r.min} min chůze</span></div>
           <div class="seg" role="group" aria-label="Výchozí místo">
-            <button class="${state.start === 'main' ? 'on' : ''}" data-act="start" data-s="main">Hlavní vchod</button>
-            <button class="${state.start === 'side' ? 'on' : ''}" data-act="start" data-s="side">Boční</button>
+            ${Object.entries(D.GATES).map(([k, gt]) => `<button class="${state.start === k ? 'on' : ''}" data-act="start" data-s="${k}">${gt.btn}</button>`).join('')}
           </div>
         </div>
         <ol class="steps">${r.steps.map((s) => `<li class="${s.kind}"><span class="si">${stepIcon(s.kind)}</span><span>${esc(s.text)}</span><span class="m">${s.m ? s.m + ' m' : ''}</span></li>`).join('')}</ol>
@@ -411,7 +431,7 @@
         </ul></div>
         <p class="fine">Ukázka · v ostrém provozu přihlášení přes BankID / NIA</p>`;
     }
-    const own = D.graves.find((g) => g.id === 'B-3-4') || D.graves.find((g) => g.status === 'obsazeno');
+    const own = D.graves.find((g) => g.sec === 'XII' && g.type === 'dvojhrob' && g.status === 'obsazeno') || D.graves.find((g) => g.status === 'obsazeno');
     const mine = [own.id, ...state.favs.filter((id) => id !== own.id)];
     const soon = new Date(); soon.setMonth(soon.getMonth() + 5);
     const ps = D.byGrave[own.id];
@@ -466,7 +486,7 @@
     if (state.from !== 'results') map.highlight(null);
     if (mobile()) setSheet('mid');
     requestAnimationFrame(() => map.showRoute(state.route));
-    history.replaceState(null, '', `#hrob=${graveCode(g)}${state.start === 'side' ? '&start=side' : ''}`);
+    history.replaceState(null, '', hashFor(g));
   }
 
   function openPoi(p) {
@@ -480,7 +500,7 @@
   function shareUrl() {
     const g = state.grave;
     const base = location.href.split('#')[0].replace(/[?&]kiosk[^&]*/, '').replace(/\?$/, '');
-    return `${base}#hrob=${graveCode(g)}${state.start === 'side' ? '&start=side' : ''}`;
+    return base + hashFor(g);
   }
   function openQr() {
     const url = shareUrl();
@@ -556,7 +576,7 @@
         state.route = D.route(state.grave.id, state.start);
         body.querySelector('.view').innerHTML = vGrave();
         map.showRoute(state.route);
-        history.replaceState(null, '', `#hrob=${graveCode(state.grave)}${state.start === 'side' ? '&start=side' : ''}`);
+        history.replaceState(null, '', hashFor(state.grave));
         break;
       case 'qr': openQr(); break;
       case 'share': navigator.share({ title: 'Trasa k hrobu', url: shareUrl() }).catch(() => {}); break;
@@ -595,10 +615,38 @@
       case 'zoom-in': map.animateZoom(1.7); break;
       case 'zoom-out': map.animateZoom(1 / 1.7); break;
       case 'fit': map.fit(); break;
+      case 'locate': locate(a); break;
       case 'layers': { const p = $('#layersPop'); p.hidden = !p.hidden; a.classList.toggle('on', !p.hidden); break; }
     }
   });
   document.querySelectorAll('#layersPop input').forEach((inp) => inp.addEventListener('change', () => map.setLayer(inp.dataset.layer, inp.checked)));
+
+  // ---------- GPS poloha (WGS84 -> S-JTSK -> mapa) ----------
+  let watchId = null;
+  const KROVAK = '+proj=krovak +lat_0=49.5 +lon_0=24.83333333333333 +alpha=30.28813972222222 +k=0.9999 +x_0=0 +y_0=0 +ellps=bessel +towgs84=570.8,85.7,462.8,4.998,1.587,5.261,3.56 +units=m +no_defs';
+  function toMap(lat, lon) {
+    const [x, y] = window.proj4('EPSG:4326', KROVAK, [lon, lat]);
+    // proj4 vrací kladné (Y, X) Křovákovy souřadnice; EPSG:5514 = (-Y, -X)
+    const ex = x > 0 ? -x : x, ny = y > 0 ? -y : y;
+    return D.fromSJTSK(ex, ny);
+  }
+  function locate(btn) {
+    if (watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; btn.classList.remove('on'); map.youAreHere(null); return; }
+    if (!navigator.geolocation || !window.proj4) { toast('Poloha není v tomto zařízení dostupná'); return; }
+    btn.classList.add('on');
+    let first = true;
+    watchId = navigator.geolocation.watchPosition((pos) => {
+      const p = toMap(pos.coords.latitude, pos.coords.longitude);
+      const inside = p.x > 0 && p.y > 0 && p.x < D.W && p.y < D.H;
+      if (!inside) {
+        if (first) toast('Jste mimo areál hřbitova. Poloha se zobrazí, až budete uvnitř.');
+        first = false; return;
+      }
+      map.youAreHere(p, 'Vy');
+      if (first) map.flyTo({ x: p.x - 250, y: p.y - 200, w: 500, h: 400 }, 14);
+      first = false;
+    }, () => { toast('Polohu se nepodařilo zjistit'); btn.classList.remove('on'); watchId = null; }, { enableHighAccuracy: true, maximumAge: 5000 });
+  }
 
   // ---------- Táhlo bottom sheetu ----------
   (function () {
@@ -662,8 +710,11 @@
   function applyHash() {
     const hp = new URLSearchParams(location.hash.slice(1));
     const hrob = hp.get('hrob');
-    if (hp.get('start') === 'side') state.start = 'side';
-    if (hrob && D.graveById[hrob.toUpperCase()]) { openGrave(hrob.toUpperCase(), { from: 'home' }); return true; }
+    if (D.GATES[hp.get('start')]) state.start = hp.get('start');
+    if (hrob) {
+      const g = D.graveById[hrob] || D.graves.find((x) => x.id.toUpperCase() === hrob.toUpperCase());
+      if (g) { openGrave(g.id, { from: 'home' }); return true; }
+    }
     const v = hp.get('v');
     if (v && ['pohrby', 'sprava', 'ucet', 'panorama'].includes(v)) { show(v, { keepHash: true }); return true; }
     return false;

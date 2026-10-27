@@ -63,21 +63,22 @@
     <button data-act="zoom-in" aria-label="Přiblížit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
     <button data-act="zoom-out" aria-label="Oddálit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 12h14"/></svg></button>
     <button data-act="fit" aria-label="Celý hřbitov"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+    <button data-act="locate" id="locateBtn" aria-label="Moje poloha"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="7.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22"/></svg></button>
     <button data-act="layers" id="layersBtn" aria-label="Vrstvy mapy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="m12 4 9 5-9 5-9-5z"/><path d="m3 14 9 5 9-5"/></svg></button>
   </div>
   <div class="layers-pop" id="layersPop" hidden>
     <h5>Zobrazit na mapě</h5>
-    <label><i style="background:#4C8299"></i>Voda <input type="checkbox" data-layer="water" checked></label>
-    <label><i style="background:#7A7F76"></i>Kontejnery <input type="checkbox" data-layer="bin" checked></label>
+    <label><i style="background:#3F7F9A"></i>Voda <input type="checkbox" data-layer="water" checked></label>
+    <label><i style="background:#7A7F76"></i>Odpadkové koše <input type="checkbox" data-layer="bin" checked></label>
     <label><i style="background:#9A7F57"></i>Lavičky <input type="checkbox" data-layer="bench" checked></label>
-    <label><i style="background:#2D4A3D"></i>Služby a budovy <input type="checkbox" data-layer="service" checked></label>
+    <label><i style="background:#2D4A3D"></i>Kříže a pomníky <input type="checkbox" data-layer="service" checked></label>
     <label><i style="background:#B06F35"></i>Panorama 360° <input type="checkbox" data-layer="pano" checked></label>
     <label><i style="background:#7F9973"></i>Stromy <input type="checkbox" data-layer="trees" checked></label>
   </div>
   <div class="map-foot">
     <div class="legend" aria-label="Legenda">
-      <span><i></i>Hrob</span><span><i class="lg-tomb"></i>Hrobka</span><span><i class="lg-urn"></i>Urna</span>
-      <span><i class="lg-free"></i>Volné místo</span><span><i class="lg-renew"></i>K obnově</span>
+      <span><i></i>Hrob</span><span><i class="lg-tomb"></i>Hrobka</span><span><i class="lg-urn"></i>Urnové místo</span>
+      <span><i class="lg-free"></i>Volné místo</span><span><i class="lg-route"></i>Trasa</span>
     </div>
     <div class="scalebar" id="scale"><i></i><span></span></div>
   </div>
@@ -93,6 +94,8 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
+<script src="data/vitkovice.js"></script>
 <script src="js/data.js"></script>
 <script src="js/map.js"></script>
 <script src="js/app.js"></script>
