@@ -24,9 +24,9 @@
   const M_PER_UNIT = 0.1;
   const W = V.w, H = V.h;
   const GATES = {
-    main: { x: 278, y: 1717, label: 'Hlavní vchod', short: 'hlavním vchodem', btn: 'Hlavní' },
-    north: { x: 735, y: 1215, label: 'Severní vchod', short: 'severním vchodem', btn: 'Severní' },
-    east: { x: 3334, y: 1790, label: 'Východní branka', short: 'východní brankou', btn: 'Východní' }
+    main: { x: 278, y: 1717, label: 'Hlavní vchod', short: 'hlavním vchodem', gen: 'hlavního vchodu', btn: 'Hlavní' },
+    north: { x: 735, y: 1215, label: 'Severní vchod', short: 'severním vchodem', gen: 'severního vchodu', btn: 'Severní' },
+    east: { x: 3334, y: 1790, label: 'Východní branka', short: 'východní brankou', gen: 'východní branky', btn: 'Východní' }
   };
 
   // ---------- Jména (fiktivní) ----------
@@ -736,7 +736,8 @@
       }
       head.push(...slice(ce, o.node === ce.a ? 0 : ce.len, c.off).slice(1));
     }
-    head = despike(dedupe(head));
+    // narovnat celou část po cestách (hrbolky na křižovatkách pryč), kontrola překážek zůstává
+    head = straightLine(despike(dedupe(head)), 35);
     // poslední úsek: z osy cesty „do kolínka“ podél řad hrobů (mezerou mezi řadami/sloupci) k hrobu
     const P0 = head[head.length - 1];
     let leg = straightLine(dedupe([P0, ...smooth(c.chain).map(toPt)]), 8);

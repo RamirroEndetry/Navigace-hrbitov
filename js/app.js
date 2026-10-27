@@ -83,9 +83,9 @@
 
   function insets() {
     const cw = window.innerWidth;
-    if (mobile()) return { left: 0, top: 120, right: 56, bottom: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sheet-h')) || 0 };
+    if (mobile()) return { left: 0, top: state.view === 'grave' ? 130 : 70, right: 56, bottom: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sheet-h')) || 0 };
     const r = panel.getBoundingClientRect();
-    return { left: Math.min(r.right + 4, cw * 0.6), top: 76, right: 70, bottom: 56 };
+    return { left: Math.min(r.right + 4, cw * 0.6), top: state.view === 'grave' ? 150 : 76, right: 70, bottom: 56 };
   }
 
   // ---------- Mapa ----------
@@ -236,6 +236,7 @@
     else if (view === 'ucet') html = vAccount();
     else if (view === 'panorama') html = vPano();
     body.innerHTML = `<div class="view view-${view}">${html}</div>`;
+    updateChip();
     body.scrollTop = 0;
     if (view !== 'grave') {
       map.select(null); map.showRoute(null);
@@ -477,6 +478,17 @@
       <ul class="results">${PANOS.map((p) => `<li><button class="result" data-act="pano" data-i="${p.pano}"><span class="r-name">${esc(p.label)}</span><span class="r-years">Snímek bude doplněn</span><span class="r-loc">${I.pano.replace('<svg', '<svg width="16" height="16"')}</span></button></li>`).join('')}</ul>`;
   }
 
+  // ---------- Karta s časem chůze na mapě ----------
+  function updateChip() {
+    const chip = $('#routeChip');
+    if (state.view !== 'grave' || !state.route || !state.route.ok) { chip.hidden = true; return; }
+    const r = state.route, g = state.grave;
+    const from = r.gate === 'gps' ? 'od vás' : 'od ' + (D.GATES[r.gate] || {}).gen;
+    chip.innerHTML = `<span class="rc-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg></span><span><b>${r.min} ${r.min === 1 ? 'MINUTA' : r.min <= 4 ? 'MINUTY' : 'MINUT'}</b><small>${r.m} m ${esc(from)} · hrob ${esc(g.id)}</small></span>`;
+    chip.hidden = false;
+    chip.classList.remove('pop'); void chip.offsetWidth; chip.classList.add('pop');
+  }
+
   // ---------- Detail hrobu ----------
   function openGrave(id, opts) {
     const g = D.graveById[id];
@@ -580,6 +592,7 @@
         state.start = a.dataset.s; if (state.start !== 'gps') store.set('start', state.start);
         state.route = D.route(state.grave.id, state.start, state.here);
         body.querySelector('.view').innerHTML = vGrave();
+        updateChip();
         map.showRoute(state.route);
         history.replaceState(null, '', hashFor(state.grave));
         break;
@@ -654,6 +667,7 @@
         state.start = 'gps';
         state.route = D.route(state.grave.id, 'gps', p);
         body.querySelector('.view').innerHTML = vGrave();
+        updateChip();
         map.showRoute(state.route, first);
       } else if (first) map.flyTo({ x: p.x - 250, y: p.y - 200, w: 500, h: 400 }, 14);
       first = false;

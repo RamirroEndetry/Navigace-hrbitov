@@ -268,6 +268,7 @@
       this.svg.classList.toggle('lod-far', rel < 1.6);
       if (this.walker) this.walker.setAttribute('r', (6 / this.k).toFixed(3));
       this.scheduleNums();
+      if (this.route) { const now = performance.now(); if (!this._chevT || now - this._chevT > 60) { this._chevT = now; this.placeChevrons(); } clearTimeout(this._chevTO); this._chevTO = setTimeout(() => this.placeChevrons(), 80); }
       if (this.o.onView) this.o.onView(this.k);
     }
 
@@ -382,34 +383,58 @@
       this.scaled = this.scaled.filter((n) => !n.classList.contains('chev'));
       this.routeG.innerHTML = '';
       this.walker = null;
+      this.route = null;
       if (!r) return;
       const line = r.draw || r.pts;
-      const dStr = roundedD(line, 30);
+      // styl jako u navigace v obchodních centrech: tenká čára, rovné úseky, ostrá kolínka, šipky po celé délce
+      const dStr = roundedD(line, 12);
       el('path', { d: dStr, class: 'route-casing' }, this.routeG);
       const p = el('path', { d: dStr, class: 'route-line', id: 'routePath' }, this.routeG);
-      // šipky ve směru chůze (každých ~12 m, konstantní velikost na obrazovce)
-      const len = p.getTotalLength();
-      const step = 120;
-      for (let l = 60; l < len - 50; l += step) {
-        const a = p.getPointAtLength(l), b = p.getPointAtLength(Math.min(len, l + 2));
-        const m = this.marker(+a.x.toFixed(1), +a.y.toFixed(1), this.routeG);
-        m.classList.add('chev');
-        m.dataset.r = (Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI).toFixed(1);
-        m.innerHTML = '<path d="M-3.5 -5 L4.5 0 L-3.5 5 L-1.5 0 Z" />';
-      }
+      this.chevG = el('g', { class: 'route-chevs' }, this.routeG);
+      this.route = { path: p, len: p.getTotalLength(), k: 0 };
+      // start: štítek (brána nebo „Jsem zde“)
       const st = line[0];
       const sm = this.marker(st.x, st.y, this.routeG);
       sm.classList.add('chev', 'route-start');
-      sm.innerHTML = '<circle r="6"/>';
-      const w = el('circle', { r: 6 / this.k, class: 'route-walker' }, this.routeG);
-      w.innerHTML = `<animateMotion dur="${Math.max(3, len / 260).toFixed(1)}s" repeatCount="indefinite"><mpath href="#routePath"/></animateMotion>`;
-      this.walker = w;
+      const kioskHere = document.documentElement.classList.contains('kiosk') && r.gate === 'main';
+      const lbl = r.gate === 'gps' || kioskHere ? 'JSEM ZDE' : 'START';
+      sm.innerHTML = `<circle class="rs-dot" r="7"/><g class="rs-pill"><rect x="-${lbl.length * 3.9 + 12}" y="-38" width="${lbl.length * 7.8 + 24}" height="22" rx="5"/><path d="M-6 -16.5 L0 -9 L6 -16.5Z"/><text y="-23">${lbl}</text></g>`;
+      // cíl: pulzující kruh kolem hrobu
+      const en = line[line.length - 1];
+      const em = this.marker(en.x, en.y, this.routeG);
+      em.classList.add('chev', 'route-end');
+      em.innerHTML = '<circle class="re-pulse" r="12"/><circle class="re-dot" r="5"/>';
+      // animace vykreslení od startu k cíli
+      const L = Math.ceil(this.route.len * this.k) + 40;
+      p.style.strokeDasharray = `${L} ${L}`;
+      p.style.strokeDashoffset = `${L}`;
+      p.getBoundingClientRect();
+      p.style.transition = 'stroke-dashoffset 1.1s cubic-bezier(.4,0,.2,1)';
+      p.style.strokeDashoffset = '0';
+      this.chevG.classList.add('pending');
+      clearTimeout(this._drawT);
+      this._drawT = setTimeout(() => { p.style.transition = ''; p.style.strokeDasharray = ''; p.style.strokeDashoffset = ''; this.chevG && this.chevG.classList.remove('pending'); }, 1200);
       this.apply();
       if (focus !== false) {
         let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
         for (const q of r.pts) { x0 = Math.min(x0, q.x); y0 = Math.min(y0, q.y); x1 = Math.max(x1, q.x); y1 = Math.max(y1, q.y); }
         this.flyTo({ x: x0 - 160, y: y0 - 160, w: x1 - x0 + 320, h: y1 - y0 + 220 }, 10);
       }
+    }
+
+    // šipky po trase v konstantním rozestupu na obrazovce (~46 px), přepočet při změně přiblížení
+    placeChevrons() {
+      const R = this.route;
+      if (!R || !this.chevG || Math.abs(R.k - this.k) / this.k < 0.03) return;
+      R.k = this.k;
+      const gap = 54 / this.k, s = 1 / this.k;
+      let html = '';
+      for (let l = gap * 0.75, n = 0; l < R.len - gap * 0.4 && n < 400; l += gap, n++) {
+        const a = R.path.getPointAtLength(l), b = R.path.getPointAtLength(Math.min(R.len, l + 1.5));
+        const ang = Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI;
+        html += `<path transform="translate(${a.x.toFixed(1)},${a.y.toFixed(1)}) rotate(${ang.toFixed(1)}) scale(${s.toFixed(4)})" d="M-6 -7.5 L6.5 0 L-6 7.5 L-2.5 0Z"/>`;
+      }
+      this.chevG.innerHTML = html;
     }
 
     focusGrave(g) { this.flyTo({ x: g.cx - 160, y: g.cy - 140, w: 320, h: 260 }, 16); }

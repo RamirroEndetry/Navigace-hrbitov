@@ -111,11 +111,18 @@ input, select { font: inherit; color: inherit; }
 .gate-dot { fill: #fff; stroke: var(--forest); stroke-width: 3.5; }
 .gate-t { font: 800 11px var(--sans); fill: var(--forest); letter-spacing: .1em; text-transform: uppercase; paint-order: stroke; stroke: #F3EFE6; stroke-width: 4px; stroke-linejoin: round; }
 
-.route-casing { fill: none; stroke: #fff; stroke-width: 11; stroke-linejoin: round; stroke-linecap: round; opacity: .95; }
-.route-line { fill: none; stroke: var(--accent); stroke-width: 6; stroke-linejoin: round; stroke-linecap: round; }
+.route-casing { fill: none; stroke: #fff; stroke-width: 8; stroke-linejoin: round; stroke-linecap: round; opacity: .9; }
+.route-line { fill: none; stroke: var(--accent); stroke-width: 4; stroke-linejoin: round; stroke-linecap: round; }
 @keyframes dash { to { stroke-dashoffset: -14; } }
-.chev path { fill: #fff; stroke: #fff; stroke-width: .8; stroke-linejoin: round; pointer-events: none; }
-.route-start circle { fill: #fff; stroke: var(--accent); stroke-width: 3; }
+.route-chevs path { fill: var(--accent); stroke: #fff; stroke-width: 1.6; stroke-linejoin: round; pointer-events: none; }
+.route-chevs { transition: opacity .4s; }
+.route-chevs.pending { opacity: 0; }
+.route-start, .route-end { pointer-events: none; }
+.rs-dot { fill: #fff; stroke: var(--accent); stroke-width: 3.5; }
+.rs-pill rect, .rs-pill path { fill: var(--accent); }
+.rs-pill text { font: 800 11px var(--sans); fill: #fff; text-anchor: middle; letter-spacing: .1em; }
+.re-dot { fill: var(--accent); stroke: #fff; stroke-width: 2; }
+.re-pulse { fill: var(--accent); opacity: .25; animation: pulse 1.8s ease-out infinite; transform-box: fill-box; transform-origin: center; }
 .route-walker { fill: #fff; stroke: var(--accent); stroke-width: 3; }
 
 .pin-in { animation: pinDrop .55s cubic-bezier(.2, 1.4, .4, 1) both; transform-origin: 0 0; }
@@ -433,6 +440,17 @@ mark { background: var(--accent-soft); color: inherit; border-radius: 3px; paddi
 .scalebar { background: var(--card); backdrop-filter: blur(12px); border-radius: 999px; padding: 9px 14px; box-shadow: var(--shadow-s); font-size: 12px; font-weight: 800; color: var(--ink-2); display: flex; align-items: center; gap: 8px; }
 .scalebar i { display: block; height: 6px; border: 2px solid var(--ink-2); border-top: 0; }
 
+.route-chip {
+  position: absolute; z-index: 14; top: 84px; left: calc(var(--panel-w) + 32px);
+  display: flex; align-items: center; gap: 12px; padding: 10px 18px 10px 10px;
+  background: var(--card); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  border-radius: 16px; box-shadow: var(--shadow); border-bottom: 3px solid var(--accent);
+}
+.route-chip.pop { animation: viewIn .35s cubic-bezier(.2, .8, .2, 1) both; }
+.route-chip .rc-ico { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+.route-chip .rc-ico svg { width: 21px; height: 21px; }
+.route-chip b { display: block; font-size: 16px; font-weight: 800; letter-spacing: .08em; }
+.route-chip small { display: block; font-size: 12px; color: var(--muted); font-weight: 700; }
 .tip {
   position: fixed; z-index: 40; pointer-events: none; background: var(--ink); color: #fff; padding: 8px 12px; border-radius: 12px;
   font-size: 13px; font-weight: 600; box-shadow: var(--shadow); max-width: 260px; transform: translate(14px, 14px);
@@ -510,6 +528,9 @@ mark { background: var(--accent-soft); color: inherit; border-radius: 3px; paddi
   .layers-pop { right: 62px; top: auto; bottom: calc(var(--sheet-h) + 14px); transform: none; }
   .map-foot { right: auto; left: 10px; bottom: calc(var(--sheet-h) + 14px); transition: bottom .35s cubic-bezier(.2, .8, .2, 1); }
   .tip { display: none; }
+  .route-chip { top: 70px; left: 10px; padding: 7px 14px 7px 7px; }
+  .route-chip .rc-ico { width: 32px; height: 32px; }
+  .route-chip b { font-size: 14px; }
   .filters { grid-template-columns: 1fr 1fr 1fr; }
   .actions { grid-template-columns: 1fr 1fr; }
 }
