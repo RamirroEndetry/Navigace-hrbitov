@@ -51,35 +51,37 @@ input, select { font: inherit; color: inherit; }
   var(--paper); }
 .map-svg { width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; }
 .map-svg.dragging { cursor: grabbing; }
-.map-svg path, .map-svg circle { vector-effect: non-scaling-stroke; }
+/* výkon: tloušťky čar jsou v jednotkách mapy (dm); konstantní tloušťku na obrazovce má jen trasa a zvýraznění */
+.route path, .gr-hit, .gr-hover, .gr-sel { vector-effect: non-scaling-stroke; }
+.map-svg { contain: strict; }
 .a-ground { fill: #DCE3D1; }
 .a-lawn { fill: #D3DDC5; }
 .a-park { fill: #C9D7BA; }
-.section { fill: #CCD7BE; stroke: #B9C6A8; stroke-width: 1; transition: fill .3s; }
+.section { fill: #CCD7BE; stroke: #B9C6A8; stroke-width: 1.2; }
 .a-ditch { fill: #E3DCCB; }
-.a-gravel { fill: #EDE5D2; stroke: #DCCFB3; stroke-width: .8; }
-.a-paved { fill: #F3ECDC; stroke: #D8CBAE; stroke-width: 1; }
+.a-gravel { fill: #EDE5D2; stroke: #DCCFB3; stroke-width: 1; }
+.a-paved { fill: #F3ECDC; stroke: #D8CBAE; stroke-width: 1.2; }
 .a-steps { fill: #E4DAC4; }
 .a-shrub { fill: #9DB48F; }
 .a-flower { fill: #E8C9C9; }
 .a-tech { fill: #C9C5BC; }
 .a-wall { fill: #A79F8E; }
-.a-monument { fill: #A39D90; stroke: #827C70; stroke-width: .6; }
-.a-building { fill: #E7DFD0; stroke: #B3A893; stroke-width: 1.4; }
-.boundary { stroke: #9C9482; stroke-width: 3; stroke-linejoin: round; }
-.l-wall { fill: none; stroke: #A39B89; stroke-width: 2.4; stroke-linecap: round; }
-.l-fence { fill: none; stroke: #8F8B82; stroke-width: 1.2; stroke-dasharray: 4 3; }
-.l-hedge { fill: none; stroke: #8EA67E; stroke-width: 4; stroke-linecap: round; }
-.l-rail { fill: none; stroke: #9A8466; stroke-width: 1.2; }
+.a-monument { fill: #A39D90; stroke: #827C70; stroke-width: .5; }
+.a-building { fill: #E7DFD0; stroke: #B3A893; stroke-width: 2; }
+.boundary { stroke: #9C9482; stroke-width: 6; stroke-linejoin: round; }
+.l-wall { fill: none; stroke: #A39B89; stroke-width: 4; stroke-linecap: round; }
+.l-fence { fill: none; stroke: #8F8B82; stroke-width: 1.5; stroke-dasharray: 6 4; }
+.l-hedge { fill: none; stroke: #8EA67E; stroke-width: 6; stroke-linecap: round; }
+.l-rail { fill: none; stroke: #9A8466; stroke-width: 1.5; }
 
-.gr { fill: #B5B0A4; stroke: #8F897C; stroke-width: .5; transition: opacity .3s; }
+.gr { fill: #B5B0A4; stroke: #8F897C; stroke-width: .3; }
 .lod-far .gr { stroke-width: 0; }
 .gr-dvojhrob, .gr-trojhrob, .gr-vicehrob { fill: #ABA699; }
 .gr-hrobka { fill: #8F8B80; stroke: #6F6B62; }
 .gr-urnovy { fill: #C6B89F; stroke: #A89A80; }
 .gr-kolumbarium { fill: #BDB2A0; stroke: #9C907C; }
 .gr-vsyp { fill: #D3C9B3; stroke: #B7AB92; }
-.gr-volne { fill: rgba(255, 255, 255, .7); stroke: var(--free); stroke-width: 1.2; stroke-dasharray: 3 2; }
+.gr-volne { fill: rgba(255, 255, 255, .7); stroke: var(--free); stroke-width: .8; stroke-dasharray: 3 2; }
 .has-hits .gr { opacity: .38; }
 .gr-hit { fill: var(--accent-2); stroke: #7E4A1D; stroke-width: 1; pointer-events: none; }
 .gr-hover { fill: var(--forest); stroke: #fff; stroke-width: 1.2; pointer-events: none; }
@@ -89,14 +91,14 @@ input, select { font: inherit; color: inherit; }
 .nums text { font-family: var(--sans); font-weight: 700; fill: rgba(255, 255, 255, .95); text-anchor: middle; pointer-events: none; }
 
 .tree-shadow { fill: rgba(42, 58, 40, .14); pointer-events: none; }
-.tree { fill: url(#gTree); pointer-events: none; opacity: .92; }
-.tree.conifer { fill: url(#gConifer); }
+.tree { fill: #87A07A; pointer-events: none; opacity: .92; }
+.tree.conifer { fill: #5E7D60; }
 .bush { fill: #8FA882; opacity: .85; pointer-events: none; }
 .lod-mid .tree { opacity: .6; }
 .lod-near .tree, .lod-near .tree-shadow { opacity: .28; }
 
 .poi { cursor: pointer; }
-.poi-dot { stroke: #fff; stroke-width: 2; filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, .25)); }
+.poi-dot { stroke: #fff; stroke-width: 2; }
 .poi:hover .poi-dot { stroke-width: 3; }
 .poi-bin, .poi-bench, .poi-memorial { display: none; }
 .lod-near .poi-bin, .lod-near .poi-bench, .lod-near .poi-memorial { display: inline; }
@@ -127,7 +129,7 @@ input, select { font: inherit; color: inherit; }
 
 .pin-in { animation: pinDrop .55s cubic-bezier(.2, 1.4, .4, 1) both; transform-origin: 0 0; }
 @keyframes pinDrop { from { transform: translateY(-22px) scale(.6); opacity: 0; } }
-.pin-shape { fill: var(--accent); stroke: #fff; stroke-width: 2.5; filter: drop-shadow(0 4px 5px rgba(60, 30, 5, .35)); }
+.pin-shape { fill: var(--accent); stroke: #fff; stroke-width: 2.5; }
 .pin-dot { fill: #fff; }
 .pin-label { font: 700 12.5px var(--sans); fill: #fff; text-anchor: middle; }
 .pin-label-bg { fill: var(--ink); }
@@ -537,3 +539,11 @@ mark { background: var(--accent-soft); color: inherit; border-radius: 3px; paddi
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* ---------- Výkon: během posunu/zoomu ---------- */
+/* rozmazání pozadí pod panely se při pohybu mapy nepřepočítává; čísla hrobů se ukážou po zastavení */
+html.map-moving .brand, html.map-moving .topnav, html.map-moving .panel, html.map-moving .map-controls button,
+html.map-moving .legend, html.map-moving .scalebar, html.map-moving .route-chip, html.map-moving .layers-pop {
+  backdrop-filter: none; -webkit-backdrop-filter: none; background: rgba(250, 248, 243, .97);
+}
+html.map-moving .nums, html.map-moving .tree-shadow { display: none; }

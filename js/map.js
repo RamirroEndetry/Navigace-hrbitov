@@ -86,7 +86,7 @@
       el('path', { d: polyD(V.boundary), class: 'boundary', fill: 'none' }, R);
       area('wall', A.wall);
       area('monument', A.monument);
-      const bld = area('building', A.building); if (bld) bld.setAttribute('filter', 'url(#fSoft)');
+      area('building', A.building);
 
       // hroby: jedna cesta na typ (výkon)
       const G = el('g', { class: 'graves' }, R);
@@ -102,12 +102,19 @@
       this.numG = el('g', { class: 'nums' }, R);
 
       // stromy a keře
+      // stromy a keře: místo ~1 300 kruhů jen 4 tvary (výrazně rychlejší vykreslení)
       const T = el('g', { class: 'trees' }, R);
+      const circ = (x, y, r) => `M${x - r} ${y}a${r} ${r} 0 1 0 ${2 * r} 0a${r} ${r} 0 1 0 ${-2 * r} 0`;
+      const parts = { shadow: '', tree: '', conifer: '', bush: '' };
       for (const t of d.trees) {
         const r = t.t === 'bush' ? 9 : t.t === 'conifer' ? 18 : 24;
-        if (t.t !== 'bush') el('circle', { cx: t.x + 3, cy: t.y + 4, r, class: 'tree-shadow' }, T);
-        el('circle', { cx: t.x, cy: t.y, r, class: t.t === 'bush' ? 'bush' : t.t === 'conifer' ? 'tree conifer' : 'tree' }, T);
+        if (t.t !== 'bush') parts.shadow += circ(t.x + 3, t.y + 4, r);
+        parts[t.t === 'bush' ? 'bush' : t.t === 'conifer' ? 'conifer' : 'tree'] += circ(t.x, t.y, r);
       }
+      el('path', { d: parts.shadow, class: 'tree-shadow' }, T);
+      el('path', { d: parts.bush, class: 'bush' }, T);
+      el('path', { d: parts.tree, class: 'tree' }, T);
+      el('path', { d: parts.conifer, class: 'tree conifer' }, T);
 
       this.routeG = el('g', { class: 'route' }, R);
       // POI
@@ -146,6 +153,7 @@
     marker(x, y, parent) {
       const g = el('g', { 'data-x': x, 'data-y': y }, parent);
       this.scaled.push(g);
+      this._mDirty = true;
       return g;
     }
     unmark(sel) {
@@ -260,16 +268,27 @@
 
     apply() {
       this.root.setAttribute('transform', `translate(${this.x.toFixed(2)},${this.y.toFixed(2)}) scale(${this.k.toFixed(5)})`);
-      const s = (1 / this.k).toFixed(5);
-      for (const g of this.scaled) g.setAttribute('transform', `translate(${g.dataset.x},${g.dataset.y}) scale(${s})${g.dataset.r ? ` rotate(${g.dataset.r})` : ''}`);
-      const rel = this.k / this.fitK;
-      this.svg.classList.toggle('lod-mid', rel > 2.2);
-      this.svg.classList.toggle('lod-near', rel > 5);
-      this.svg.classList.toggle('lod-far', rel < 1.6);
-      if (this.walker) this.walker.setAttribute('r', (6 / this.k).toFixed(3));
-      this.scheduleNums();
-      if (this.route) { const now = performance.now(); if (!this._chevT || now - this._chevT > 60) { this._chevT = now; this.placeChevrons(); } clearTimeout(this._chevTO); this._chevTO = setTimeout(() => this.placeChevrons(), 80); }
-      if (this.o.onView) this.o.onView(this.k);
+      // značky (POI, popisky, špendlík) mají stálou velikost – přepočet jen při změně zoomu nebo nových značkách
+      const zoomed = this.k !== this._lastK;
+      if (zoomed || this._mDirty) {
+        this._lastK = this.k; this._mDirty = false;
+        const s = (1 / this.k).toFixed(5);
+        for (const g of this.scaled) g.setAttribute('transform', `translate(${g.dataset.x},${g.dataset.y}) scale(${s})${g.dataset.r ? ` rotate(${g.dataset.r})` : ''}`);
+        const rel = this.k / this.fitK;
+        this.svg.classList.toggle('lod-mid', rel > 2.2);
+        this.svg.classList.toggle('lod-near', rel > 5);
+        this.svg.classList.toggle('lod-far', rel < 1.6);
+      }
+      // během pohybu: bez rozmazání pozadí panelů a bez čísel hrobů; po zastavení se vše doplní
+      const html = document.documentElement;
+      if (!html.classList.contains('map-moving')) html.classList.add('map-moving');
+      clearTimeout(this._idleT);
+      this._idleT = setTimeout(() => {
+        html.classList.remove('map-moving');
+        this.scheduleNums();
+        if (this.route) this.placeChevrons();
+      }, 140);
+      if (this.o.onView && zoomed) this.o.onView(this.k);
     }
 
     // čísla hrobů jen ve viditelném výřezu při velkém přiblížení
@@ -469,7 +488,7 @@
       if (this._chevLoop) return;
       const tick = (now) => {
         if (!this.route) { this._chevLoop = null; return; }
-        this.moveChevrons(now);
+        if (!document.documentElement.classList.contains('map-moving')) this.moveChevrons(now);
         this._chevLoop = requestAnimationFrame(tick);
       };
       this._chevLoop = requestAnimationFrame(tick);
