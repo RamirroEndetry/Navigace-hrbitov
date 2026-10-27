@@ -24,7 +24,8 @@
   const M_PER_UNIT = 0.1;
   const W = V.w, H = V.h;
   const GATES = {
-    main: { x: 278, y: 1717, label: 'Hlavní vchod', short: 'hlavním vchodem', btn: 'Hlavní' },
+    // via: pevný vstupní koridor od brány (kolem zábradlí prostranství před budovou až na střed hlavní aleje)
+    main: { x: 278, y: 1717, label: 'Hlavní vchod', short: 'hlavním vchodem', btn: 'Hlavní', via: [[375, 1685], [431, 1855], [664, 1777], [904, 1715]], viaExit: 1 },
     north: { x: 735, y: 1215, label: 'Severní vchod', short: 'severním vchodem', btn: 'Severní' },
     east: { x: 3334, y: 1790, label: 'Východní branka', short: 'východní brankou', btn: 'Východní' }
   };
@@ -437,12 +438,15 @@
     }
     return true;
   }
-  function straighten(pts) {
+  function straighten(pts, fixed) {
     if (pts.length < 3) return pts.slice();
     // poslední bod leží na obrysu hrobu – ten úsek neověřovat
     const body = pts.slice(0, -1);
     const keep = new Uint8Array(body.length); keep[0] = keep[body.length - 1] = 1;
-    const stack = [[0, body.length - 1]];
+    // pevné body (vstupní koridor) se nikdy neslučují
+    const fx = Math.min(fixed || 0, body.length - 1);
+    for (let i = 0; i <= fx; i++) keep[i] = 1;
+    const stack = [[fx, body.length - 1]];
     while (stack.length) {
       const [i, j] = stack.pop();
       if (j - i < 2) continue;
@@ -456,7 +460,7 @@
     }
     const out = body.filter((_, i) => keep[i]);
     // téměř rovné zlomy (pod 12°) sloučit, pokud zkratka nevede přes překážku
-    for (let i = 1; i < out.length - 1;) {
+    for (let i = Math.max(1, fx + 1); i < out.length - 1;) {
       const p = out[i - 1], q = out[i], r = out[i + 1];
       const t = Math.abs(Math.atan2((q.x - p.x) * (r.y - q.y) - (q.y - p.y) * (r.x - q.x), (q.x - p.x) * (r.x - q.x) + (q.y - p.y) * (r.y - q.y)));
       if (t < 0.21 && clearSeg(p, r)) out.splice(i, 1); else i++;
@@ -485,9 +489,21 @@
 
     // --- napojení startu na síť ---
     // vchod i GPS: volný průchod po zpevněné ploše (např. přes prostranství) až na osu cesty
-    const sa = startCache[startKey] || attach(gate.x, gate.y, 500, 250);
-    if (startKey !== 'gps') startCache[startKey] = sa;
-    const starts = sa ? sa.cands.map((c) => ({ e: c.e, off: c.off, gd: c.gd, chain: c.chain })) : [];
+    // vstupní koridor: povinný úvod (do bodu viaExit), dál lze z koridoru odbočit v kterémkoli jeho bodě
+    const corridor = (gate.via || []).map(([x, y]) => ({ x, y }));
+    let starts = startCache[startKey];
+    if (!starts) {
+      starts = [];
+      const exits = corridor.length ? corridor.map((p, i) => i).filter((i) => i >= (gate.viaExit || 0)) : [-1];
+      for (const i of exits) {
+        const from = i < 0 ? gate : corridor[i];
+        let pre = 0;
+        for (let k = 0, p = gate; k <= i; p = corridor[k++]) pre += dist(p, corridor[k]);
+        const sa = attach(from.x, from.y, 500, corridor.length ? 60 : 250);
+        if (sa) for (const c of sa.cands) starts.push({ e: c.e, off: c.off, gd: c.gd + pre, chain: c.chain, via: i < 0 ? [] : corridor.slice(0, i + 1) });
+      }
+      if (startKey !== 'gps') startCache[startKey] = starts;
+    }
     const fallback = { ok: false, gate: startKey, u: Infinity, pts: [{ x: gate.x, y: gate.y }, { x: g.cx, y: g.cy }], steps: [{ kind: 'finish', text: 'Trasu se nepodařilo spočítat' }], m: 0, min: 0 };
     if (!end || !end.cands.length || !starts.length) return fallback;
 
@@ -558,7 +574,7 @@
       const d = Math.hypot(g.ring[i] - lp.x, g.ring[i + 1] - lp.y);
       if (d < ed) { ed = d; ex = g.ring[i]; ey = g.ring[i + 1]; }
     }
-    if (!start.lead) start.lead = [{ x: gate.x, y: gate.y }, ...smooth(start.chain.slice().reverse()).map(toPt)];
+    if (!start.lead) start.lead = [{ x: gate.x, y: gate.y }, ...start.via, ...smooth(start.chain.slice().reverse()).map(toPt)];
     const head = dedupe([...start.lead, ...net]);
     const pts = dedupe([...head, ...lastLeg, { x: ex, y: ey }]);
     let total = 0;
@@ -621,7 +637,7 @@
     const sideTxt = into && ed < 12 ? 'přímo před vámi' : cr > 0 ? 'po vaší pravé straně' : 'po vaší levé straně';
     steps.push({ kind: 'finish', text: `Hrob ${g.num} v sekci ${g.sec} je ${sideTxt}` });
     const m = roundM(meters(total));
-    return { ok: true, gate: startKey, u: best.tot, pts, draw: straighten(pts), steps, m, min: Math.max(1, Math.round(m / 70)), split: head.length };
+    return { ok: true, gate: startKey, u: best.tot, pts, draw: straighten(pts, start.via.length), steps, m, min: Math.max(1, Math.round(m / 70)), split: head.length };
   }
 
   // ---------- Pohřby (relativně k dnešku) ----------
