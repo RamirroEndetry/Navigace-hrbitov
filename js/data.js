@@ -442,7 +442,7 @@
     NET.nodes.forEach((n) => (n.adj = []));
     NET.edges.forEach((e, i) => { NET.nodes[e.a].adj.push(i); NET.nodes[e.b].adj.push(i); });
     // narovnat všechny cesty: rovné úseky středem cesty (odchylka max. 1,2 m)
-    for (const e of NET.edges) { e.pts = straightLine(e.pts, 12); measure(e); }
+    for (const e of NET.edges) { e.pts = straightLine(e.pts, 6); measure(e); }
     // brány: vlastní uzel s rovnou spojnicí kolmo na nejbližší místo cesty (cesta se tam rozdělí)
     for (const [key, gt] of Object.entries(GATES)) {
       let best = null;
@@ -549,7 +549,7 @@
   const endCache = {};
   function graveEnd(g) {
     if (!endCache[g.id]) {
-      let a = attach(g.cx, g.cy, 260);
+      let a = attach(g.cx, g.cy, 600, 250);
       // daleko od zpevněných cest (např. urnový háj): hledat dál po trávě
       if (!a || !a.cands.length) a = attach(g.cx, g.cy, 2500, 120);
       endCache[g.id] = a;
@@ -647,6 +647,28 @@
     return out;
   }
 
+  // odstranit „hrbolky“: krátký výstupek (1–3 body) uprostřed jinak rovného úseku (např. posunutý střed křižovatky)
+  function debump(pts) {
+    const out = pts.slice();
+    const dirDiff = (p, q, r, t) => Math.abs(angDiff(heading(p, q), heading(r, t)));
+    for (let changed = true; changed;) {
+      changed = false;
+      for (let k = 1; k <= 3 && !changed; k++) {
+        for (let i = 1; i + k < out.length; i++) {
+          const a = out[i - 1], c = out[i + k];
+          if (dist(a, c) > 160) continue;
+          let dev = 0;
+          for (let j = i; j < i + k; j++) dev = Math.max(dev, Math.abs((c.x - a.x) * (a.y - out[j].y) - (a.x - out[j].x) * (c.y - a.y)) / (dist(a, c) || 1));
+          if (dev < 6 || dev > 45) continue;
+          const inOk = i < 2 || dirDiff(out[i - 2], a, a, c) < 0.3;
+          const outOk = i + k + 1 >= out.length || dirDiff(a, c, c, out[i + k + 1]) < 0.3;
+          if (inOk && outOk && clearSeg(a, c, i === 1)) { out.splice(i, k); changed = true; break; }
+        }
+      }
+    }
+    return out;
+  }
+
   const cache = {};
   function route(graveId, startKey, at) {
     if (startKey === 'gps' && at) return routeFrom(graveId, 'gps', { x: at.x, y: at.y, label: 'Moje poloha', short: 'od místa, kde stojíte' });
@@ -695,7 +717,8 @@
     }
 
     // --- nejlepší místo, kde z cesty odbočit k hrobu ---
-    const GRASS = 1.25;
+    // chůze mimo chodník je výrazně „dražší“ – trasa zůstane na cestě co nejdéle a k hrobu odbočí až na nejbližším místě
+    const GRASS = 4;
     let best = null;
     for (const c of end.cands) {
       const e = NET.edges[c.e];
@@ -737,7 +760,7 @@
       head.push(...slice(ce, o.node === ce.a ? 0 : ce.len, c.off).slice(1));
     }
     // narovnat celou část po cestách (hrbolky na křižovatkách pryč), kontrola překážek zůstává
-    head = straightLine(despike(dedupe(head)), 35);
+    head = debump(straightLine(despike(dedupe(head)), 8));
     // poslední úsek: z osy cesty „do kolínka“ podél řad hrobů (mezerou mezi řadami/sloupci) k hrobu
     const P0 = head[head.length - 1];
     let leg = straightLine(dedupe([P0, ...smooth(c.chain).map(toPt)]), 8);
@@ -815,7 +838,7 @@
     const sideTxt = into && ed < 12 ? 'přímo před vámi' : cr > 0 ? 'po vaší pravé straně' : 'po vaší levé straně';
     steps.push({ kind: 'finish', text: `Hrob ${g.num} v sekci ${g.sec} je ${sideTxt}` });
     const m = roundM(meters(total));
-    return { ok: true, gate: startKey, u: best.tot, pts, draw, steps, m, min: Math.max(1, Math.round(m / 70)) };
+    return { ok: true, gate: startKey, u: best.tot, pts, draw, head, leg, steps, m, min: Math.max(1, Math.round(m / 70)) };
   }
 
   // ---------- Pohřby (relativně k dnešku) ----------
