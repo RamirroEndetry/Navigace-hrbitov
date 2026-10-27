@@ -66,55 +66,72 @@
       const d = this.d, V = d.V, svg = this.svg;
       const defs = el('defs', null, svg);
       defs.innerHTML = `
-        <radialGradient id="gTree" cx="38%" cy="34%" r="70%"><stop offset="0" stop-color="#A9BC9C"/><stop offset=".65" stop-color="#7F9973"/><stop offset="1" stop-color="#6A8560"/></radialGradient>
-        <radialGradient id="gConifer" cx="38%" cy="34%" r="70%"><stop offset="0" stop-color="#7E9C7E"/><stop offset=".7" stop-color="#557558"/><stop offset="1" stop-color="#46644A"/></radialGradient>
-        <filter id="fSoft" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#33402F" flood-opacity=".22"/></filter>
         ${Object.entries(ICONS).map(([k, v]) => `<symbol id="i-${k}" viewBox="0 0 24 24">${v}</symbol>`).join('')}`;
 
       this.root = el('g', { class: 'root' }, svg);
       const R = this.root, A = V.areas;
       const area = (cls, list, parent) => list && list.length && el('path', { d: polyD(list), class: 'a-' + cls, 'fill-rule': 'evenodd' }, parent || R);
+      // stín = posunutá kopie sloučeného tvaru (bez SVG filtrů → rychlé)
+      const shadowOf = (d, cls, dx, dy, parent) => el('path', { d, class: cls, transform: `translate(${dx} ${dy})`, 'fill-rule': 'evenodd' }, parent || R);
 
+      // areál: měkký „lem“ kolem hřbitova, plocha, trávníky
+      const bD = polyD(V.boundary);
+      el('path', { d: bD, class: 'halo' }, R);
       area('ground', V.boundary);
       area('lawn', A.lawn); area('park', A.park);
+      // sekce jako mírně vyvýšené záhony se stínem
       const S = el('g', { class: 'sections' }, R);
+      shadowOf(d.sections.map((s) => polyD(s.area)).join(''), 'section-shadow', 2.5, 3.5, S);
       for (const s of d.sections) el('path', { d: polyD(s.area), class: 'section', 'data-sec': s.id, 'fill-rule': 'evenodd' }, S);
       area('ditch', A.ditch);
+      // cesty: obrubník + písková plocha
       area('gravel', A.gravel); area('paved', A.paved); area('steps', A.steps);
       area('shrub', A.shrub); area('flower', A.flower); area('tech', A.tech);
-      for (const [cls, list] of Object.entries(V.lines)) if (list.length) el('path', { d: list.map(lineD).join(''), class: 'l-' + cls }, R);
-      el('path', { d: polyD(V.boundary), class: 'boundary', fill: 'none' }, R);
+      for (const [cls, list] of Object.entries(V.lines)) {
+        if (!list.length) continue;
+        const ld = list.map(lineD).join('');
+        el('path', { d: ld, class: 'l-' + cls }, R);
+        if (cls === 'hedge') el('path', { d: ld, class: 'l-hedge-hi' }, R);
+      }
+      // zeď: dvojitá linka
+      el('path', { d: bD, class: 'boundary', fill: 'none' }, R);
+      el('path', { d: bD, class: 'boundary-hi', fill: 'none' }, R);
       area('wall', A.wall);
+      if (A.monument && A.monument.length) shadowOf(polyD(A.monument), 'obj-shadow', 1, 1.5);
       area('monument', A.monument);
+      if (A.building && A.building.length) shadowOf(polyD(A.building), 'bld-shadow', 7, 9);
       area('building', A.building);
 
-      // hroby: jedna cesta na typ (výkon)
+      // hroby: kamenné desky se stínem, jedna cesta na typ (výkon)
       const G = el('g', { class: 'graves' }, R);
       const buckets = {};
+      let allG = '';
       for (const g of d.graves) {
         const key = g.status === 'volne' ? 'volne' : g.type;
-        (buckets[key] = buckets[key] || []).push(ringD(g.ring));
+        const rd = ringD(g.ring);
+        (buckets[key] = buckets[key] || []).push(rd);
+        if (key !== 'volne') allG += rd;
       }
+      shadowOf(allG, 'gr-shadow', 1.3, 1.8, G);
       for (const key of [...GRAVE_CLASSES, 'volne']) if (buckets[key]) el('path', { d: buckets[key].join(''), class: 'gr gr-' + key }, G);
       this.hitPath = el('path', { class: 'gr-hit', d: '' }, R);
       this.hoverPath = el('path', { class: 'gr-hover', d: '' }, R);
       this.selPath = el('path', { class: 'gr-sel', d: '' }, R);
       this.numG = el('g', { class: 'nums' }, R);
 
-      // stromy a keře
-      // stromy a keře: místo ~1 300 kruhů jen 4 tvary (výrazně rychlejší vykreslení)
+      // stromy: stín, koruna a odlesk – vše sloučené do pár tvarů
       const T = el('g', { class: 'trees' }, R);
-      const circ = (x, y, r) => `M${x - r} ${y}a${r} ${r} 0 1 0 ${2 * r} 0a${r} ${r} 0 1 0 ${-2 * r} 0`;
-      const parts = { shadow: '', tree: '', conifer: '', bush: '' };
+      const circ = (x, y, r) => `M${(x - r).toFixed(1)} ${y.toFixed(1)}a${r} ${r} 0 1 0 ${2 * r} 0a${r} ${r} 0 1 0 ${-2 * r} 0`;
+      const parts = { shadow: '', tree: '', treeHi: '', conifer: '', coniferHi: '', bush: '' };
       for (const t of d.trees) {
         const r = t.t === 'bush' ? 9 : t.t === 'conifer' ? 18 : 24;
-        if (t.t !== 'bush') parts.shadow += circ(t.x + 3, t.y + 4, r);
-        parts[t.t === 'bush' ? 'bush' : t.t === 'conifer' ? 'conifer' : 'tree'] += circ(t.x, t.y, r);
+        if (t.t === 'bush') { parts.bush += circ(t.x, t.y, r); continue; }
+        parts.shadow += circ(t.x + 6, t.y + 8, r * 1.02);
+        const k = t.t === 'conifer' ? 'conifer' : 'tree';
+        parts[k] += circ(t.x, t.y, r);
+        parts[k + 'Hi'] += circ(t.x - r * 0.28, t.y - r * 0.3, +(r * 0.56).toFixed(1));
       }
-      el('path', { d: parts.shadow, class: 'tree-shadow' }, T);
-      el('path', { d: parts.bush, class: 'bush' }, T);
-      el('path', { d: parts.tree, class: 'tree' }, T);
-      el('path', { d: parts.conifer, class: 'tree conifer' }, T);
+      for (const [k, cls] of [['shadow', 'tree-shadow'], ['bush', 'bush'], ['tree', 'tree'], ['treeHi', 'tree-hi'], ['conifer', 'tree conifer'], ['coniferHi', 'tree-hi conifer-hi']]) el('path', { d: parts[k], class: cls }, T);
 
       this.routeG = el('g', { class: 'route' }, R);
       // POI
@@ -128,24 +145,31 @@
         el('use', { href: '#i-' + p.t, x: -r * 0.8, y: -r * 0.8, width: r * 1.6, height: r * 1.6, fill: '#fff' }, g);
         const tt = el('title', null, g); tt.textContent = p.label;
       });
-      // popisky sekcí
+      // popisky sekcí: bílé štítky s patkovým písmem a stínem
       this.secG = el('g', { class: 'sec-labels' }, R);
       for (const s of d.sections) {
         const g = this.marker(s.lx, s.ly, this.secG);
         g.classList.add('sec-label'); g.dataset.sec = s.id;
         if (s.n < 100) g.classList.add('small');
-        const w = 12 + s.id.length * 7.6;
-        el('rect', { x: -w / 2, y: -11, width: w, height: 22, rx: 11, class: 'sec-pill' }, g);
-        const t = el('text', { y: 4.3, class: 'sec-t' }, g); t.textContent = s.id;
+        const w = 16 + s.id.length * 7.4;
+        el('rect', { x: -w / 2, y: -10, width: w, height: 22, rx: 7, class: 'sec-pill-shadow' }, g);
+        el('rect', { x: -w / 2, y: -12, width: w, height: 22, rx: 7, class: 'sec-pill' }, g);
+        const t = el('text', { y: 3.6, class: 'sec-t' }, g); t.textContent = s.id;
       }
-      // vchody
+      // vchody: výrazná značka s ikonou brány a štítkem
       const GT = el('g', { class: 'gates' }, R);
       for (const [key, gt] of Object.entries(d.GATES)) {
         const g = this.marker(gt.x, gt.y, GT);
         g.classList.add('gate-marker', 'gate-' + key);
-        el('circle', { r: 8, class: 'gate-dot' }, g);
-        const t = el('text', { class: 'gate-t', x: key === 'east' ? -14 : 14, y: 4, 'text-anchor': key === 'east' ? 'end' : 'start' }, g);
-        t.textContent = gt.label;
+        el('circle', { r: 14, cy: 2, class: 'gate-shadow' }, g);
+        el('circle', { r: 13, class: 'gate-dot' }, g);
+        el('path', { d: 'M-6 6V-1a6 6 0 0 1 12 0v7M0 6V0', class: 'gate-ico' }, g);
+        const right = key !== 'east';
+        const lbl = gt.label.toUpperCase(), w = 18 + lbl.length * 7.1;
+        const x0 = right ? 18 : -18 - w;
+        el('rect', { x: x0, y: -11, width: w, height: 22, rx: 11, class: 'gate-pill' }, g);
+        const t = el('text', { class: 'gate-t', x: x0 + w / 2, y: 4 }, g);
+        t.textContent = lbl;
       }
       this.markG = el('g', { class: 'marks' }, R);
     }

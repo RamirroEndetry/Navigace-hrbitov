@@ -46,41 +46,51 @@ input, select { font: inherit; color: inherit; }
 .app { position: fixed; inset: 0; }
 
 /* ---------- Mapa ---------- */
-.map { position: absolute; inset: 0; background:
-  radial-gradient(1200px 800px at 70% 30%, #F6F3EC 0%, transparent 60%),
-  var(--paper); }
+.map { position: absolute; inset: 0; background: radial-gradient(1100px 760px at 66% 40%, rgba(255, 252, 244, .9) 0%, transparent 62%), radial-gradient(rgba(70, 60, 40, .075) 1px, transparent 1.3px) 0 0 / 16px 16px, #EEE8DC }
 .map-svg { width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; }
 .map-svg.dragging { cursor: grabbing; }
 /* výkon: tloušťky čar jsou v jednotkách mapy (dm); konstantní tloušťku na obrazovce má jen trasa a zvýraznění */
 .route path, .gr-hit, .gr-hover, .gr-sel { vector-effect: non-scaling-stroke; }
 .map-svg { contain: strict; }
-.a-ground { fill: #DCE3D1; }
-.a-lawn { fill: #D3DDC5; }
-.a-park { fill: #C9D7BA; }
-.section { fill: #CCD7BE; stroke: #B9C6A8; stroke-width: 1.2; }
-.a-ditch { fill: #E3DCCB; }
-.a-gravel { fill: #EDE5D2; stroke: #DCCFB3; stroke-width: 1; }
-.a-paved { fill: #F3ECDC; stroke: #D8CBAE; stroke-width: 1.2; }
-.a-steps { fill: #E4DAC4; }
-.a-shrub { fill: #9DB48F; }
-.a-flower { fill: #E8C9C9; }
+.a-ground { fill: #D5DFC6 }
+.a-lawn { fill: #CBD9BB }
+.a-park { fill: #BFD1AC }
+.halo { fill: none; stroke: rgba(70, 82, 58, .08); stroke-width: 40; stroke-linejoin: round; pointer-events: none; }
+.section-shadow { fill: rgba(48, 70, 42, .13); pointer-events: none; }
+.boundary-hi { stroke: #EFE8D8; stroke-width: 1.6; stroke-linejoin: round; pointer-events: none; }
+.l-hedge-hi { fill: none; stroke: #97B086; stroke-width: 2.5; stroke-linecap: round; pointer-events: none; }
+.obj-shadow { fill: rgba(40, 40, 30, .25); pointer-events: none; }
+.bld-shadow { fill: rgba(52, 50, 38, .16); pointer-events: none; }
+.gr-shadow { fill: rgba(56, 50, 38, .3); pointer-events: none; }
+.lod-far .gr-shadow { opacity: .55; }
+.tree-hi { fill: #A3BC90; opacity: .9; pointer-events: none; }
+.tree-hi.conifer-hi { fill: #6F8F70; }
+.lod-mid .tree-hi { opacity: .6; }
+.lod-near .tree-hi { opacity: .25; }
+.section { fill: #C9D6B7; stroke: rgba(255, 255, 255, .6); stroke-width: 1.6 }
+.a-ditch { fill: #E2D9C4 }
+.a-gravel { fill: #EFE5CC; stroke: #D7C7A2; stroke-width: 1.4 }
+.a-paved { fill: #F6EFDF; stroke: #D3C29C; stroke-width: 1.8 }
+.a-steps { fill: #E6DAC0; stroke: #CDBB96; stroke-width: 1 }
+.a-shrub { fill: #8EA97F }
+.a-flower { fill: #E9C6C4 }
 .a-tech { fill: #C9C5BC; }
 .a-wall { fill: #A79F8E; }
-.a-monument { fill: #A39D90; stroke: #827C70; stroke-width: .5; }
-.a-building { fill: #E7DFD0; stroke: #B3A893; stroke-width: 2; }
-.boundary { stroke: #9C9482; stroke-width: 6; stroke-linejoin: round; }
+.a-monument { fill: #9C968A; stroke: #7A7469; stroke-width: .6 }
+.a-building { fill: #F1EADC; stroke: #B9AC91; stroke-width: 2.2 }
+.boundary { stroke: #8E8573; stroke-width: 7; stroke-linejoin: round }
 .l-wall { fill: none; stroke: #A39B89; stroke-width: 4; stroke-linecap: round; }
 .l-fence { fill: none; stroke: #8F8B82; stroke-width: 1.5; stroke-dasharray: 6 4; }
-.l-hedge { fill: none; stroke: #8EA67E; stroke-width: 6; stroke-linecap: round; }
+.l-hedge { fill: none; stroke: #6F8C62; stroke-width: 7; stroke-linecap: round }
 .l-rail { fill: none; stroke: #9A8466; stroke-width: 1.5; }
 
-.gr { fill: #B5B0A4; stroke: #8F897C; stroke-width: .3; }
+.gr { fill: #BEB8AB; stroke: #F3EFE7; stroke-width: .35 }
 .lod-far .gr { stroke-width: 0; }
-.gr-dvojhrob, .gr-trojhrob, .gr-vicehrob { fill: #ABA699; }
-.gr-hrobka { fill: #8F8B80; stroke: #6F6B62; }
-.gr-urnovy { fill: #C6B89F; stroke: #A89A80; }
-.gr-kolumbarium { fill: #BDB2A0; stroke: #9C907C; }
-.gr-vsyp { fill: #D3C9B3; stroke: #B7AB92; }
+.gr-dvojhrob, .gr-trojhrob, .gr-vicehrob { fill: #B2AC9E }
+.gr-hrobka { fill: #8C877C; stroke: #E7E2D8 }
+.gr-urnovy { fill: #D3C4A6; stroke: #F6F0E2 }
+.gr-kolumbarium { fill: #C8BAA2; stroke: #F3ECDE }
+.gr-vsyp { fill: #DDD3BD; stroke: #F6F1E6 }
 .gr-volne { fill: rgba(255, 255, 255, .7); stroke: var(--free); stroke-width: .8; stroke-dasharray: 3 2; }
 .has-hits .gr { opacity: .38; }
 .gr-hit { fill: var(--accent-2); stroke: #7E4A1D; stroke-width: 1; pointer-events: none; }
@@ -90,12 +100,12 @@ input, select { font: inherit; color: inherit; }
 .lod-mid .hit-dot { display: none; }
 .nums text { font-family: var(--sans); font-weight: 700; fill: rgba(255, 255, 255, .95); text-anchor: middle; pointer-events: none; }
 
-.tree-shadow { fill: rgba(42, 58, 40, .14); pointer-events: none; }
-.tree { fill: #87A07A; pointer-events: none; opacity: .92; }
-.tree.conifer { fill: #5E7D60; }
-.bush { fill: #8FA882; opacity: .85; pointer-events: none; }
-.lod-mid .tree { opacity: .6; }
-.lod-near .tree, .lod-near .tree-shadow { opacity: .28; }
+.tree-shadow { fill: rgba(38, 56, 34, .17); pointer-events: none }
+.tree { fill: #7B976F; pointer-events: none }
+.tree.conifer { fill: #4F6E51 }
+.bush { fill: #8DA87E; pointer-events: none }
+.lod-mid .tree { opacity: .72 }
+.lod-near .tree, .lod-near .tree-shadow { opacity: .3 }
 
 .poi { cursor: pointer; }
 .poi-dot { stroke: #fff; stroke-width: 2; }
@@ -105,13 +115,18 @@ input, select { font: inherit; color: inherit; }
 .hide-water .layer-water, .hide-bin .layer-bin, .hide-bench .layer-bench, .hide-pano .layer-pano, .hide-service .layer-service { display: none !important; }
 .hide-trees .trees { display: none; }
 .sec-label { cursor: pointer; }
-.sec-pill { fill: rgba(45, 74, 61, .92); stroke: rgba(255, 255, 255, .9); stroke-width: 1.5; }
-.sec-t { font: 800 11.5px var(--sans); fill: #fff; text-anchor: middle; letter-spacing: .04em; pointer-events: none; }
-.sec-label:hover .sec-pill { fill: var(--accent); }
-.lod-near .sec-label { opacity: .55; }
+.sec-pill-shadow { fill: rgba(30, 40, 30, .14); }
+.sec-label.sec-label .sec-pill-shadow { pointer-events: none; }
+.sec-pill { fill: #FFFDF8; stroke: rgba(45, 74, 61, .22); stroke-width: 1 }
+.sec-t { font: 600 12.5px var(--serif); fill: var(--forest); text-anchor: middle; letter-spacing: .02em; pointer-events: none }
+.sec-label:hover .sec-pill { fill: var(--forest) }
+.lod-near .sec-label { opacity: .8; }
 .lod-far .sec-label.small { display: none; }
-.gate-dot { fill: #fff; stroke: var(--forest); stroke-width: 3.5; }
-.gate-t { font: 800 11px var(--sans); fill: var(--forest); letter-spacing: .1em; text-transform: uppercase; paint-order: stroke; stroke: #F3EFE6; stroke-width: 4px; stroke-linejoin: round; }
+.gate-shadow { fill: rgba(30, 40, 30, .2); }
+.gate-ico { fill: none; stroke: #fff; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.gate-pill { fill: #FFFDF8; stroke: rgba(45, 74, 61, .25); stroke-width: 1; }
+.gate-dot { fill: var(--forest); stroke: #FFFDF8; stroke-width: 3 }
+.gate-t { font: 800 10.5px var(--sans); fill: var(--forest); letter-spacing: .12em; text-anchor: middle }
 
 .route-casing { fill: none; stroke: #fff; stroke-width: 8; stroke-linejoin: round; stroke-linecap: round; opacity: .9; }
 .route-line { fill: none; stroke: var(--accent); stroke-width: 4; stroke-linejoin: round; stroke-linecap: round; }
@@ -434,11 +449,18 @@ mark { background: var(--accent-soft); color: inherit; border-radius: 3px; paddi
   box-shadow: var(--shadow-s); font-size: 12.5px; font-weight: 700; color: var(--ink-2);
 }
 .legend span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-.legend i { width: 9px; height: 13px; border-radius: 2px; background: var(--stone); }
+.legend i { width: 9px; height: 13px; border-radius: 2px; background: #BEB8AB; box-shadow: 1px 1.5px 0 rgba(56, 50, 38, .3); }
 .legend .lg-free { background: #fff; outline: 1.5px dashed var(--free); outline-offset: -1.5px; }
 .legend .lg-route { background: var(--accent); width: 16px; height: 4px; border-radius: 3px; }
-.legend .lg-tomb { background: #8F8B80; width: 14px; }
-.legend .lg-urn { background: #C6B89F; width: 9px; height: 9px; }
+.legend .lg-tomb { background: #8C877C; width: 14px; }
+.legend .lg-urn { background: #D3C4A6; width: 9px; height: 9px; }
+.compass { width: 44px; height: 44px; border-radius: 50%; background: var(--card); backdrop-filter: blur(12px); box-shadow: var(--shadow-s); display: grid; place-items: center; }
+.compass svg { width: 34px; height: 34px; overflow: visible; }
+.compass .cp-ring { fill: none; stroke: rgba(45, 74, 61, .18); stroke-width: 1; }
+.compass .cp-n { fill: var(--accent); }
+.compass .cp-s { fill: #C9C2B3; }
+.compass text { font: 800 7px var(--sans); fill: var(--forest); text-anchor: middle; }
+.sec-label:hover .sec-t { fill: #fff; }
 .scalebar { background: var(--card); backdrop-filter: blur(12px); border-radius: 999px; padding: 9px 14px; box-shadow: var(--shadow-s); font-size: 12px; font-weight: 800; color: var(--ink-2); display: flex; align-items: center; gap: 8px; }
 .scalebar i { display: block; height: 6px; border: 2px solid var(--ink-2); border-top: 0; }
 
@@ -543,7 +565,7 @@ mark { background: var(--accent-soft); color: inherit; border-radius: 3px; paddi
 /* ---------- Výkon: během posunu/zoomu ---------- */
 /* rozmazání pozadí pod panely se při pohybu mapy nepřepočítává; čísla hrobů se ukážou po zastavení */
 html.map-moving .brand, html.map-moving .topnav, html.map-moving .panel, html.map-moving .map-controls button,
-html.map-moving .legend, html.map-moving .scalebar, html.map-moving .route-chip, html.map-moving .layers-pop {
+html.map-moving .legend, html.map-moving .scalebar, html.map-moving .compass, html.map-moving .route-chip, html.map-moving .layers-pop {
   backdrop-filter: none; -webkit-backdrop-filter: none; background: rgba(250, 248, 243, .97);
 }
-html.map-moving .nums, html.map-moving .tree-shadow { display: none; }
+html.map-moving .nums, html.map-moving .tree-shadow, html.map-moving .tree-hi, html.map-moving .halo { display: none; }
