@@ -111,10 +111,11 @@ input, select { font: inherit; color: inherit; }
 .gate-dot { fill: #fff; stroke: var(--forest); stroke-width: 3.5; }
 .gate-t { font: 800 11px var(--sans); fill: var(--forest); letter-spacing: .1em; text-transform: uppercase; paint-order: stroke; stroke: #F3EFE6; stroke-width: 4px; stroke-linejoin: round; }
 
-.route-casing { fill: none; stroke: #fff; stroke-width: 10; stroke-linejoin: round; stroke-linecap: round; opacity: .95; }
-.route-line { fill: none; stroke: var(--accent); stroke-width: 5; stroke-linejoin: round; stroke-linecap: round; }
-.route-dash { fill: none; stroke: #FFE9CF; stroke-width: 2; stroke-dasharray: 2 12; stroke-linecap: round; animation: dash 1.1s linear infinite; }
+.route-casing { fill: none; stroke: #fff; stroke-width: 11; stroke-linejoin: round; stroke-linecap: round; opacity: .95; }
+.route-line { fill: none; stroke: var(--accent); stroke-width: 6; stroke-linejoin: round; stroke-linecap: round; }
 @keyframes dash { to { stroke-dashoffset: -14; } }
+.chev path { fill: #fff; stroke: #fff; stroke-width: .8; stroke-linejoin: round; pointer-events: none; }
+.route-start circle { fill: #fff; stroke: var(--accent); stroke-width: 3; }
 .route-walker { fill: #fff; stroke: var(--accent); stroke-width: 3; }
 
 .pin-in { animation: pinDrop .55s cubic-bezier(.2, 1.4, .4, 1) both; transform-origin: 0 0; }

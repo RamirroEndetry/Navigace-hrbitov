@@ -15,6 +15,22 @@
   const polyD = (polys) => polys.map((p) => p.map(ringD).join('')).join('');
   const lineD = (l) => { let s = 'M' + l[0] + ' ' + l[1]; for (let i = 2; i < l.length; i += 2) s += 'L' + l[i] + ' ' + l[i + 1]; return s; };
 
+  // lomená čára se zaoblenými kolínky (poloměr do r, max. polovina kratšího úseku)
+  const roundedD = (pts, r) => {
+    if (pts.length < 3) return 'M' + pts.map((p) => `${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join('L');
+    let d = `M${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`;
+    for (let i = 1; i < pts.length - 1; i++) {
+      const p = pts[i - 1], q = pts[i], n = pts[i + 1];
+      const l1 = Math.hypot(q.x - p.x, q.y - p.y), l2 = Math.hypot(n.x - q.x, n.y - q.y);
+      const rr = Math.min(r, l1 / 2, l2 / 2);
+      const ax = q.x + (p.x - q.x) * rr / (l1 || 1), ay = q.y + (p.y - q.y) * rr / (l1 || 1);
+      const bx = q.x + (n.x - q.x) * rr / (l2 || 1), by = q.y + (n.y - q.y) * rr / (l2 || 1);
+      d += `L${ax.toFixed(1)} ${ay.toFixed(1)}Q${q.x.toFixed(1)} ${q.y.toFixed(1)} ${bx.toFixed(1)} ${by.toFixed(1)}`;
+    }
+    const e = pts[pts.length - 1];
+    return d + `L${e.x.toFixed(1)} ${e.y.toFixed(1)}`;
+  };
+
   const ICONS = {
     water: '<path d="M12 4.5c3 3.9 5 6.5 5 8.9a5 5 0 0 1-10 0c0-2.4 2-5 5-8.9z"/>',
     bin: '<path d="M8.2 9h7.6l-.8 9.5H9zM7 6.6h10v1.6H7zM10 5h4v1.6h-4z"/>',
@@ -245,7 +261,7 @@
     apply() {
       this.root.setAttribute('transform', `translate(${this.x.toFixed(2)},${this.y.toFixed(2)}) scale(${this.k.toFixed(5)})`);
       const s = (1 / this.k).toFixed(5);
-      for (const g of this.scaled) g.setAttribute('transform', `translate(${g.dataset.x},${g.dataset.y}) scale(${s})`);
+      for (const g of this.scaled) g.setAttribute('transform', `translate(${g.dataset.x},${g.dataset.y}) scale(${s})${g.dataset.r ? ` rotate(${g.dataset.r})` : ''}`);
       const rel = this.k / this.fitK;
       this.svg.classList.toggle('lod-mid', rel > 2.2);
       this.svg.classList.toggle('lod-near', rel > 5);
@@ -363,17 +379,32 @@
     }
 
     showRoute(r, focus) {
+      this.scaled = this.scaled.filter((n) => !n.classList.contains('chev'));
       this.routeG.innerHTML = '';
       this.walker = null;
       if (!r) return;
-      const dStr = 'M' + r.pts.map((p) => `${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join('L');
+      const line = r.draw || r.pts;
+      const dStr = roundedD(line, 30);
       el('path', { d: dStr, class: 'route-casing' }, this.routeG);
       const p = el('path', { d: dStr, class: 'route-line', id: 'routePath' }, this.routeG);
-      el('path', { d: dStr, class: 'route-dash' }, this.routeG);
-      const w = el('circle', { r: 6 / this.k, class: 'route-walker' }, this.routeG);
+      // šipky ve směru chůze (každých ~12 m, konstantní velikost na obrazovce)
       const len = p.getTotalLength();
+      const step = 120;
+      for (let l = 60; l < len - 50; l += step) {
+        const a = p.getPointAtLength(l), b = p.getPointAtLength(Math.min(len, l + 2));
+        const m = this.marker(+a.x.toFixed(1), +a.y.toFixed(1), this.routeG);
+        m.classList.add('chev');
+        m.dataset.r = (Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI).toFixed(1);
+        m.innerHTML = '<path d="M-3.5 -5 L4.5 0 L-3.5 5 L-1.5 0 Z" />';
+      }
+      const st = line[0];
+      const sm = this.marker(st.x, st.y, this.routeG);
+      sm.classList.add('chev', 'route-start');
+      sm.innerHTML = '<circle r="6"/>';
+      const w = el('circle', { r: 6 / this.k, class: 'route-walker' }, this.routeG);
       w.innerHTML = `<animateMotion dur="${Math.max(3, len / 260).toFixed(1)}s" repeatCount="indefinite"><mpath href="#routePath"/></animateMotion>`;
       this.walker = w;
+      this.apply();
       if (focus !== false) {
         let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
         for (const q of r.pts) { x0 = Math.min(x0, q.x); y0 = Math.min(y0, q.y); x1 = Math.max(x1, q.x); y1 = Math.max(y1, q.y); }

@@ -427,6 +427,44 @@
     return out;
   }
 
+  // Narovnání čáry pro vykreslení: jen skutečné zlomy (tolerance 2 m),
+  // ale rovný úsek nesmí vést přes hrob, budovu ani zeď – jinak se zlom ponechá.
+  function clearSeg(a, b) {
+    const n = Math.ceil(dist(a, b) / 1.5);
+    for (let s = 1; s < n; s++) {
+      const x = a.x + (b.x - a.x) * s / n, y = a.y + (b.y - a.y) * s / n;
+      if (!cost[Math.floor(y / R) * GW + Math.floor(x / R)]) return false;
+    }
+    return true;
+  }
+  function straighten(pts) {
+    if (pts.length < 3) return pts.slice();
+    // poslední bod leží na obrysu hrobu – ten úsek neověřovat
+    const body = pts.slice(0, -1);
+    const keep = new Uint8Array(body.length); keep[0] = keep[body.length - 1] = 1;
+    const stack = [[0, body.length - 1]];
+    while (stack.length) {
+      const [i, j] = stack.pop();
+      if (j - i < 2) continue;
+      const a = body[i], b = body[j], L = dist(a, b) || 1;
+      let md = -1, mk = -1;
+      for (let k = i + 1; k < j; k++) {
+        const d = Math.abs((b.x - a.x) * (a.y - body[k].y) - (a.x - body[k].x) * (b.y - a.y)) / L;
+        if (d > md) { md = d; mk = k; }
+      }
+      if (md > 20 || !clearSeg(a, b)) { keep[mk] = 1; stack.push([i, mk], [mk, j]); }
+    }
+    const out = body.filter((_, i) => keep[i]);
+    // téměř rovné zlomy (pod 12°) sloučit, pokud zkratka nevede přes překážku
+    for (let i = 1; i < out.length - 1;) {
+      const p = out[i - 1], q = out[i], r = out[i + 1];
+      const t = Math.abs(Math.atan2((q.x - p.x) * (r.y - q.y) - (q.y - p.y) * (r.x - q.x), (q.x - p.x) * (r.x - q.x) + (q.y - p.y) * (r.y - q.y)));
+      if (t < 0.21 && clearSeg(p, r)) out.splice(i, 1); else i++;
+    }
+    out.push(pts[pts.length - 1]);
+    return out;
+  }
+
   const cache = {};
   function route(graveId, startKey, at) {
     if (startKey === 'gps' && at) return routeFrom(graveId, 'gps', { x: at.x, y: at.y, label: 'Moje poloha', short: 'od místa, kde stojíte' });
@@ -583,7 +621,7 @@
     const sideTxt = into && ed < 12 ? 'přímo před vámi' : cr > 0 ? 'po vaší pravé straně' : 'po vaší levé straně';
     steps.push({ kind: 'finish', text: `Hrob ${g.num} v sekci ${g.sec} je ${sideTxt}` });
     const m = roundM(meters(total));
-    return { ok: true, gate: startKey, u: best.tot, pts, steps, m, min: Math.max(1, Math.round(m / 70)), split: head.length };
+    return { ok: true, gate: startKey, u: best.tot, pts, draw: straighten(pts), steps, m, min: Math.max(1, Math.round(m / 70)), split: head.length };
   }
 
   // ---------- Pohřby (relativně k dnešku) ----------
