@@ -18,7 +18,7 @@
   const graveCode = (g) => g.id;
   const TYPE = { hrob: 'Hrob', dvojhrob: 'Dvojhrob', trojhrob: 'Trojhrob', vicehrob: 'Vícehrob', hrobka: 'Hrobka', urnovy: 'Urnový hrob', kolumbarium: 'Kolumbárium', vsyp: 'Vsypové místo' };
   const SEC_IDS = D.sections.map((s) => s.id).sort((a, b) => b.length - a.length);
-  const hashFor = (g) => `#hrob=${encodeURIComponent(g.id)}${state.start !== 'auto' && state.start !== 'gps' ? '&start=' + state.start : ''}`;
+  const hashFor = (g, guide = GUIDE) => `#hrob=${encodeURIComponent(g.id)}${state.start !== 'auto' && state.start !== 'gps' ? '&start=' + state.start : ''}${guide ? '&p=1' : ''}`;
   // ukázkové dotazy z aktuálních dat
   const EXAMPLES = (() => {
     const cnt = {};
@@ -60,6 +60,10 @@
   const params = new URLSearchParams(location.search);
   const KIOSK = params.has('kiosk');
   if (KIOSK) document.documentElement.classList.add('kiosk');
+  // Průvodce: odkaz z QR / sdílení otevře jen jeden hrob a cestu k němu, bez dalších nabídek
+  let GUIDE = new URLSearchParams(location.hash.slice(1)).has('p') && !KIOSK;
+  const setGuide = (on) => { GUIDE = on; document.documentElement.classList.toggle('guide', on); };
+  setGuide(GUIDE);
   const state = {
     view: 'home', res: null, resLimit: 40, query: '', grave: null, route: null,
     start: KIOSK ? 'main' : (D.GATES[store.get('start', 'auto')] ? store.get('start', 'auto') : 'auto'), from: null,
@@ -73,6 +77,7 @@
   // ---------- Bottom sheet (mobil) ----------
   function sheetPx(s) {
     const h = window.innerHeight;
+    if (GUIDE && s !== 'max') return Math.round(h * (s === 'min' ? 0.34 : 0.56));
     return s === 'min' ? (state.view === 'home' ? 214 : 150) : s === 'mid' ? Math.round(h * 0.5) : h - 78;
   }
   function setSheet(s, px) {
@@ -91,7 +96,7 @@
   // ---------- Mapa ----------
   const map = new window.CemeteryMap($('#map'), D, {
     insets,
-    onGrave: (g) => openGrave(g.id, { from: state.view === 'grave' ? state.from : state.view }),
+    onGrave: (g) => { if (!GUIDE) openGrave(g.id, { from: state.view === 'grave' ? state.from : state.view }); },
     onHover: showTip,
     onView: updateScale,
     onPoi: openPoi
@@ -299,7 +304,25 @@
 
   function stepIcon(kind) { return kind === 'left' ? I.left : kind === 'right' ? I.right : kind === 'start' ? I.gate : kind === 'finish' ? I.pin : I.up; }
 
+  function vGuide() {
+    const g = state.grave, ps = D.byGrave[g.id], r = state.route;
+    const gps = r.gate === 'gps';
+    const names = ps.length
+      ? `<div class="people${ps.length > 2 ? ' many' : ''}">${ps.map((p) => `<div class="person"><div class="nm">${esc(p.first)} ${esc(p.last)}</div><div class="dt">${yearOf(p.born)} – ${yearOf(p.died)}</div></div>`).join('')}</div>`
+      : `<div class="h2">Hrobové místo ${graveCode(g)}</div>`;
+    return `
+      <div class="eyebrow">Cesta k hrobu</div>
+      ${names}
+      <div class="g-loc"><div><small>Oddělení</small><b>${g.sec}</b></div><div><small>Řada</small><b>${g.row}</b></div><div><small>Hrob</small><b>${g.num}</b></div></div>
+      <div class="g-sum">${I.nav}<span><b>${r.min} min chůze</b> · ${r.m} m<small>${gps ? 'Od místa, kde právě stojíte' : 'Od vchodu: ' + esc(D.GATES[r.gate].label)}</small></span></div>
+      ${gps ? '' : `<button class="btn forest g-here" data-act="guide-locate">${I.pin}Jsem už na hřbitově – vést mě odsud</button>`}
+      <ol class="steps g-steps">${r.steps.map((s) => `<li class="${s.kind}"><span class="si">${stepIcon(s.kind)}</span><span>${esc(s.text)}</span><span class="m">${s.m ? s.m + ' m' : ''}</span></li>`).join('')}</ol>
+      <div class="g-help">${I.tel}<span>Potřebujete pomoc? <a href="tel:${D.info.phone.replace(/\s/g, '')}">${esc(D.info.phone)}</a><small>Kancelář správy hřbitova</small></span></div>
+      <button class="link g-full" data-act="guide-exit">Otevřít celou aplikaci</button>`;
+  }
+
   function vGrave() {
+    if (GUIDE) return vGuide();
     const g = state.grave, ps = D.byGrave[g.id], r = state.route;
     const fav = state.favs.includes(g.id), lit = state.candles.includes(g.id);
     const backLbl = state.from === 'results' ? 'Výsledky hledání' : state.from === 'pohrby' ? 'Pohřby' : state.from === 'ucet' ? 'Můj účet' : 'Zpět';
@@ -517,7 +540,7 @@
   function shareUrl() {
     const g = state.grave;
     const base = location.href.split('#')[0].replace(/[?&]kiosk[^&]*/, '').replace(/\?$/, '');
-    return base + hashFor(g);
+    return base + hashFor(g, true);
   }
   function openQr() {
     const url = shareUrl();
@@ -551,7 +574,7 @@
   function modal(html) { $('#modalBody').innerHTML = html; modalEl.hidden = false; }
   function closeModal() { modalEl.hidden = true; $('#modalBody').innerHTML = ''; }
   modalEl.addEventListener('click', (e) => { if (e.target === modalEl) closeModal(); });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { if (!modalEl.hidden) closeModal(); else if (state.view === 'grave') back(); } });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { if (!modalEl.hidden) closeModal(); else if (state.view === 'grave' && !GUIDE) back(); } });
   let toastT;
   function toast(msg) {
     const t = $('#toast'); t.textContent = msg; t.classList.add('show');
@@ -574,7 +597,7 @@
       return;
     }
     const act = a.dataset.act;
-    if (a.tagName === 'A' && act === 'home') e.preventDefault();
+    if (a.tagName === 'A' && act === 'home') { e.preventDefault(); if (GUIDE) return; }
     switch (act) {
       case 'home': q.value = ''; state.res = null; $('#clearBtn').hidden = true; show('home'); map.fit(); break;
       case 'view': show(a.dataset.v); break;
@@ -597,6 +620,14 @@
         history.replaceState(null, '', hashFor(state.grave));
         break;
       case 'qr': openQr(); break;
+      case 'guide-locate': {
+        const lb = $('#locateBtn');
+        if (watchId == null) locate(lb);
+        if (state.here) { state.start = 'gps'; state.route = D.route(state.grave.id, 'gps', state.here); body.querySelector('.view').innerHTML = vGrave(); map.showRoute(state.route, true); }
+        else toast('Zjišťuji vaši polohu…');
+        break;
+      }
+      case 'guide-exit': setGuide(false); openGrave(state.grave.id, { from: 'home' }); break;
       case 'share': navigator.share({ title: 'Trasa k hrobu', url: shareUrl() }).catch(() => {}); break;
       case 'fav': {
         const id = state.grave.id, i = state.favs.indexOf(id);
@@ -739,9 +770,11 @@
     if (D.GATES[hp.get('start')] || hp.get('start') === 'auto') state.start = hp.get('start');
     if (hrob) {
       const g = D.graveById[hrob] || D.graves.find((x) => x.id.toUpperCase() === hrob.toUpperCase());
-      if (g) { openGrave(g.id, { from: 'home' }); return true; }
+      if (g) { setGuide(hp.has('p') && !KIOSK); openGrave(g.id, { from: 'home' }); return true; }
+      setGuide(false);
     }
     const v = hp.get('v');
+    setGuide(false);
     if (v && ['pohrby', 'sprava', 'ucet', 'panorama'].includes(v)) { show(v, { keepHash: true }); return true; }
     return false;
   }
