@@ -331,8 +331,11 @@
   const NET_FIX = {
     remove: [[[330, 1650], [660, 1650], [660, 1850], [330, 1850]]],
     add: [
-      [[368, 1668], [412, 1870]],
-      [[412, 1870], [521, 1822], [612, 1789]]
+      [[278, 1717], [400, 1718]],               // hlavní brána → rovně dovnitř na prostranství
+      [[400, 1718], [368, 1669]],               // → cesta na sever mezi budovami
+      [[400, 1718], [424, 1819]],               // dolů středem zpevněného pásu mezi trávníkem a terasou
+      [[424, 1819], [381, 1873]],               // → cesta k jihu
+      [[424, 1819], [521, 1822], [612, 1789]]   // kolem terasy na hlavní alej
     ]
   };
 
@@ -408,13 +411,14 @@
     for (const [a, b, w, flat] of V.net.edges) {
       const pts = [];
       for (let k = 0; k < flat.length; k += 2) pts.push({ x: flat[k], y: flat[k + 1] });
-      const mid = pts[Math.floor(pts.length / 2)];
+      // skutečný geometrický střed hrany (ne prostřední vrchol)
+      const tmp = { pts }; measure(tmp); const mid = pointAt(tmp, tmp.len / 2);
       if (NET_FIX.remove.some((poly) => inPoly(poly, mid.x, mid.y))) continue;
       addEdge(a, b, pts, w);
     }
     for (const line of NET_FIX.add) {
       const pts = line.map(([x, y]) => ({ x, y }));
-      const a = nodeAt(pts[0].x, pts[0].y, 60), b = nodeAt(pts[pts.length - 1].x, pts[pts.length - 1].y, 60);
+      const a = nodeAt(pts[0].x, pts[0].y, 20), b = nodeAt(pts[pts.length - 1].x, pts[pts.length - 1].y, 20);
       pts[0] = { x: NET.nodes[a].x, y: NET.nodes[a].y }; pts[pts.length - 1] = { x: NET.nodes[b].x, y: NET.nodes[b].y };
       addEdge(a, b, pts, 40);
     }
@@ -445,6 +449,8 @@
     for (const e of NET.edges) { e.pts = straightLine(e.pts, 6); measure(e); }
     // brány: vlastní uzel s rovnou spojnicí kolmo na nejbližší místo cesty (cesta se tam rozdělí)
     for (const [key, gt] of Object.entries(GATES)) {
+      const own = NET.nodes.findIndex((n) => n.adj.length && Math.hypot(n.x - gt.x, n.y - gt.y) < 3);
+      if (own >= 0) { GATE_NODE[key] = own; continue; }
       let best = null;
       NET.edges.forEach((e, ei) => {
         for (let k = 1; k < e.pts.length; k++) {
@@ -573,7 +579,7 @@
       for (let i = 1; i < out.length - 1; i++) {
         const a = out[i - 1], b = out[i], c = out[i + 1];
         const t = Math.abs(angDiff(heading(a, b), heading(b, c)));
-        if (t > 2.0 && Math.min(dist(a, b), dist(b, c)) < 80 && clearSeg(a, c, i === 1)) { out.splice(i, 1); changed = true; break; }
+        if ((t > 2.0 && Math.min(dist(a, b), dist(b, c)) < 80 || t > 1.7 && Math.min(dist(a, b), dist(b, c)) < 70) && clearSeg(a, c, i === 1)) { out.splice(i, 1); changed = true; break; }
       }
     }
     return out;
@@ -798,7 +804,7 @@
     for (let changed = true; changed;) {
       changed = false;
       for (let i = 1; i < legs.length; i++) {
-        if (legs[i].u >= 120) continue;
+        if (legs[i].u >= 80) continue;
         if (i === legs.length - 1 && legs[i].u >= 40 && Math.abs(angDiff(legs[i - 1].h1, legs[i].h0)) > 1.0) continue;
         if (i < legs.length - 1) { legs[i + 1].u += legs[i].u; legs[i + 1].at = legs[i].at; legs[i + 1].fromH = legs[i - 1].h1; }
         else legs[i - 1].u += legs[i].u;
