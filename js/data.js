@@ -141,9 +141,11 @@
 
   // ---------- Mřížka pro trasování (0,4 m) ----------
   const R = 4, GW = Math.ceil(W / R), GH = Math.ceil(H / R);
-  let cost = null, reach = null;
+  // cost = mřížka pro hledání cesty (hroby mírně zmenšené), solid = plné překážky pro kontrolu čáry
+  let cost = null, reach = null, solid = null;
   // 0 = neprůchozí, 1 = zpevněná cesta, 3 = tráva / ulička mezi hroby (+1 u hrany překážky)
-  function fill(rings, val) {
+  function fill(rings, val, target) {
+    const T = target || cost;
     let y0 = Infinity, y1 = -Infinity;
     for (const r of rings) for (let i = 1; i < r.length; i += 2) { if (r[i] < y0) y0 = r[i]; if (r[i] > y1) y1 = r[i]; }
     const ys = Math.max(0, Math.floor(y0 / R)), ye = Math.min(GH - 1, Math.floor(y1 / R));
@@ -160,7 +162,7 @@
       xs.sort((a, b) => a - b);
       for (let k = 0; k + 1 < xs.length; k += 2) {
         const a = Math.max(0, Math.ceil(xs[k] / R - 0.5)), b = Math.min(GW - 1, Math.floor(xs[k + 1] / R - 0.5));
-        for (let cx = a; cx <= b; cx++) cost[cy * GW + cx] = val;
+        for (let cx = a; cx <= b; cx++) T[cy * GW + cx] = val;
       }
     }
   }
@@ -181,7 +183,17 @@
     for (const k of ['paved', 'gravel', 'steps']) for (const p of A[k] || []) fill(p, 1);
     for (const k of ['building', 'monument', 'wall', 'shrub', 'flower', 'tech']) for (const p of A[k] || []) fill(p, 0);
     for (const k of ['wall', 'fence', 'hedge', 'rail']) for (const l of V.lines[k] || []) stroke(l, 0);
-    for (const g of graves) fill([g.ring], 0);
+    // hroby v mřížce o 25 cm menší než na mapě – úzké uličky mezi zarovnanými řadami zůstanou průchozí
+    solid = cost.slice();
+    for (const g of graves) fill([g.ring], 0, solid);
+    for (const g of graves) {
+      const r = g.ring, out = [];
+      for (let i = 0; i < r.length; i += 2) {
+        const dx = r[i] - g.cx, dy = r[i + 1] - g.cy, L = Math.hypot(dx, dy) || 1, k = Math.max(0.3, 1 - 2.5 / L);
+        out.push(g.cx + dx * k, g.cy + dy * k);
+      }
+      fill([out], 0);
+    }
     // okraj u překážky (0,4 m): 1 → 2 (chodník u hrany), 3 → 4 (tráva u hrany)
     const edge = new Uint8Array(GW * GH);
     for (let y = 1; y < GH - 1; y++) for (let x = 1; x < GW - 1; x++) {
@@ -275,8 +287,8 @@
     for (let s = 1; s < n; s++) {
       const x = ax + (bx - ax) * s / n, y = ay + (by - ay) * s / n;
       for (const [ox, oy] of [[0, 0], [0.15, 0.15], [-0.15, 0.15], [0.15, -0.15], [-0.15, -0.15]]) {
-        const c = cost[Math.floor(y + oy) * GW + Math.floor(x + ox)];
-        if (!c || c > ca) return false;
+        const ci = Math.floor(y + oy) * GW + Math.floor(x + ox), c = cost[ci];
+        if (!c || c > ca || !solid[ci]) return false;
       }
     }
     return true;
@@ -359,7 +371,7 @@
     const n = Math.ceil(dist(a, b) / 1.5);
     for (let s = skipStart ? 2 : 1; s < n; s++) {
       const x = a.x + (b.x - a.x) * s / n, y = a.y + (b.y - a.y) * s / n;
-      if (!cost[Math.floor(y / R) * GW + Math.floor(x / R)]) return false;
+      if (!solid[Math.floor(y / R) * GW + Math.floor(x / R)]) return false;
     }
     return true;
   }
@@ -567,6 +579,74 @@
     return out;
   }
 
+  // ---------- poslední úsek k hrobu: varianty „do kolínka“ podle os hrobu ----------
+  function graveAxes(g) {
+    const r = g.ring;
+    const p0 = { x: r[0], y: r[1] }, p1 = { x: r[2], y: r[3] }, p3 = { x: r[r.length - 2], y: r[r.length - 1] };
+    const L1 = dist(p0, p1) || 1, L3 = dist(p0, p3) || 1;
+    return { u: { x: (p1.x - p0.x) / L1, y: (p1.y - p0.y) / L1 }, v: { x: (p3.x - p0.x) / L3, y: (p3.y - p0.y) / L3 }, w: L1, h: L3 };
+  }
+  function nearestOnRing(g, p) {
+    let best = null, bd = Infinity;
+    const r = g.ring, n = r.length / 2;
+    for (let i = 0; i < n; i++) {
+      const a = { x: r[2 * i], y: r[2 * i + 1] }, b = { x: r[(2 * i + 2) % r.length], y: r[(2 * i + 3) % r.length] };
+      const L2 = (b.x - a.x) ** 2 + (b.y - a.y) ** 2 || 1;
+      const t = Math.max(0, Math.min(1, ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / L2));
+      const q = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }, d = dist(p, q);
+      if (d < bd) { bd = d; best = q; }
+    }
+    return best;
+  }
+  // délka čáry (v dm) uvnitř cizích hrobů a přes pevné překážky
+  function legScore(pts, g) {
+    let inside = 0, len = 0;
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1], b = pts[i], L = dist(a, b), m = Math.max(1, Math.ceil(L));
+      len += L;
+      for (let s = 0; s < m; s++) {
+        const x = a.x + (b.x - a.x) * (s + 0.5) / m, y = a.y + (b.y - a.y) * (s + 0.5) / m;
+        const o = graveAt(x, y, 0);
+        if (o && o !== g && inRing(o.ring, x, y)) inside += L / m;
+        else if (!o) { const k = Math.floor(y / R) * GW + Math.floor(x / R); if (!solid[k] && !isGraveCell(x, y)) inside += 2 * L / m; }
+      }
+    }
+    return inside * 6 + len;
+  }
+  function isGraveCell(x, y) { return !!graveAt(x, y, 3); }
+  // varianty „do kolínka“: odbočit z cesty přesně tam, kde na ni ústí spára mezi řadami/sloupci hrobů,
+  // projít spárou k hrobu a krátce k jeho okraji
+  function elbowLegs(P, Pprev, g) {
+    const { u, v, w, h } = graveAxes(g), G = { x: g.cx, y: g.cy };
+    const along = (o, d, t) => ({ x: o.x + d.x * t, y: o.y + d.y * t });
+    const dot = (a, d) => a.x * d.x + a.y * d.y;
+    const L = dist(Pprev, P) || 1, d = { x: (P.x - Pprev.x) / L, y: (P.y - Pprev.y) / L };
+    // průsečík přímky cesty (P + t·d) s přímkou spáry (O + s·e)
+    const meet = (O, e) => {
+      const den = d.x * e.y - d.y * e.x;
+      if (Math.abs(den) < 0.2) return null;
+      const t = ((O.x - P.x) * e.y - (O.y - P.y) * e.x) / den;
+      return t >= -3 && t <= 150 ? along(P, d, t) : null;
+    };
+    const out = [];
+    const rel = { x: P.x - G.x, y: P.y - G.y };
+    for (const off of [0.3, 2]) {
+      for (const side of [1, -1]) {
+        // spára vedle hrobu ve směru v (mezi sloupci): přímka G + u·bu, směr v
+        const bu = side * (w / 2 + off), O1 = along(G, u, bu), Q1 = meet(O1, v);
+        if (Q1) out.push(dedupe([P, Q1, along(O1, v, 0), along(G, u, side * w / 2)]));
+        // spára před/za hrobem (mezi řadami): přímka G + v·av, směr u
+        const av = side * (h / 2 + off), O2 = along(G, v, av), Q2 = meet(O2, u);
+        if (Q2) out.push(dedupe([P, Q2, along(O2, u, 0), along(G, v, side * h / 2)]));
+        // jednoduché kolínko z bodu P
+        const pu = dot(rel, u), pv = dot(rel, v);
+        out.push(dedupe([P, along(P, v, av - pv), along(G, v, av), along(G, v, side * h / 2)]));
+        out.push(dedupe([P, along(P, u, bu - pu), along(G, u, bu), along(G, u, side * w / 2)]));
+      }
+    }
+    return out;
+  }
+
   const cache = {};
   function route(graveId, startKey, at) {
     if (startKey === 'gps' && at) return routeFrom(graveId, 'gps', { x: at.x, y: at.y, label: 'Moje poloha', short: 'od místa, kde stojíte' });
@@ -657,15 +737,22 @@
       head.push(...slice(ce, o.node === ce.a ? 0 : ce.len, c.off).slice(1));
     }
     head = despike(dedupe(head));
-    // poslední úsek: z osy cesty rovně uličkou k hrobu
-    const leg = straightLine(dedupe([head[head.length - 1], ...smooth(c.chain).map(toPt)]), 8);
-    const lp = leg[leg.length - 1];
-    let ex = g.cx, ey = g.cy, ed = Infinity;
-    for (let i = 0; i < g.ring.length; i += 2) {
-      const d = Math.hypot(g.ring[i] - lp.x, g.ring[i + 1] - lp.y);
-      if (d < ed) { ed = d; ex = g.ring[i]; ey = g.ring[i + 1]; }
+    // poslední úsek: z osy cesty „do kolínka“ podél řad hrobů (mezerou mezi řadami/sloupci) k hrobu
+    const P0 = head[head.length - 1];
+    let leg = straightLine(dedupe([P0, ...smooth(c.chain).map(toPt)]), 8);
+    {
+      const gridLp = leg[leg.length - 1];
+      leg = [...leg, nearestOnRing(g, gridLp)];
+      let bestLeg = leg, bestScore = legScore(leg, g);
+      for (const cand of elbowLegs(P0, head[Math.max(0, head.length - 2)], g)) {
+        const sc = legScore(cand, g);
+        if (sc < bestScore) { bestScore = sc; bestLeg = cand; }
+      }
+      leg = bestLeg;
     }
-    const pts = despike(dedupe([...head, ...leg.slice(1), { x: ex, y: ey }]));
+    const pts = despike(dedupe([...head, ...leg.slice(1)]));
+    const lp = leg[leg.length - 2] || leg[0];
+    const ed = dist(lp, leg[leg.length - 1]);
     // čistá čára: rovné úseky, zlomy jen v zatáčkách (téměř rovné zlomy sloučit)
     const draw = pts.slice();
     for (let i = 1; i < draw.length - 2;) {
@@ -770,6 +857,6 @@
     W, H, GATES, M_PER_UNIT, V,
     sections, secById, secOrder, graves, persons, graveById, byGrave, trees, pois, funerals, info,
     route, graveAt, gravesIn, hoursFor, norm, iso, fromSJTSK,
-    _grid: () => { if (!cost) buildGrid(); prepNet(); return { cost, GW, GH, R, nearestWalkable, astar, NET, GATE_NODE }; }
+    _grid: () => { if (!cost) buildGrid(); prepNet(); return { cost, solid, GW, GH, R, nearestWalkable, astar, NET, GATE_NODE }; }
   };
 })();

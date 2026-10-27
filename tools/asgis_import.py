@@ -63,6 +63,104 @@ def roman_key(s):
     return (tot, m.group(2))
 
 
+def regularize_graves(geoms, secs, gap=0.06):
+    """Zarovnání hrobů pro čistou mapu: obdélníky natočené podle okolních hrobů, řady a sloupce
+    srovnané do mřížky, bez překryvů. Těžiště hrobu se posune nejvýš o 30 cm."""
+    import math, statistics
+    from shapely import affinity
+    from shapely.geometry import box
+    from shapely.strtree import STRtree
+
+    info = []
+    for g in geoms:
+        c = list(g.minimum_rotated_rectangle.exterior.coords)
+        edges = [(c[k], c[k + 1]) for k in range(4)]
+        e = max(edges, key=lambda p: math.dist(*p))
+        L, Wd = math.dist(*e), min(math.dist(*q) for q in edges)
+        info.append({"a": math.atan2(e[1][1] - e[0][1], e[1][0] - e[0][0]) % (math.pi / 2),
+                     "big": Wd > 0 and L / Wd > 1.3 and g.area > 0.8, "area": g.area, "c": g.centroid})
+    cents = [i["c"] for i in info]
+    ctree = STRtree(cents)
+    sec_mean, sec_straight = {}, {}
+    for sname in set(secs):
+        sx = sy = wsum = 0.0
+        for i, s in zip(info, secs):
+            if s == sname:
+                wt = i["area"] * (3 if i["big"] else 1)
+                sx += wt * math.cos(4 * i["a"]); sy += wt * math.sin(4 * i["a"]); wsum += wt
+        sec_mean[sname] = math.atan2(sy, sx) / 4 if (sx or sy) else None
+        # rovná sekce = natočení hrobů je jednotné (délka výsledného vektoru blízko 1)
+        sec_straight[sname] = wsum > 0 and math.hypot(sx, sy) / wsum > 0.82
+    # 1) natočení: plochou vážený průměr jasně obdélníkových hrobů v okolí (8 m, pak 15 m, pak sekce)
+    theta = []
+    for i, c in enumerate(cents):
+        t = sec_mean[secs[i]] if sec_straight[secs[i]] else None
+        for rad in ((8.0, 15.0) if t is None else ()):
+            sx = sy = 0.0
+            for j in ctree.query(c.buffer(rad)):
+                j = int(j)
+                if secs[j] == secs[i] and info[j]["big"]:
+                    sx += info[j]["area"] * math.cos(4 * info[j]["a"]); sy += info[j]["area"] * math.sin(4 * info[j]["a"])
+            if sx or sy:
+                t = math.atan2(sy, sx) / 4; break
+        if t is None:
+            t = sec_mean[secs[i]] if sec_mean[secs[i]] is not None else info[i]["a"]
+        theta.append(t)
+    print("zarovnani: rovne sekce", sorted(k for k, v in sec_straight.items() if v), "| obloukove", sorted(k for k, v in sec_straight.items() if not v))
+    # 2) obdélník v daném natočení (u = podél natočení, v = kolmo)
+    rects = []
+    for g, c, t in zip(geoms, cents, theta):
+        r = affinity.rotate(g, -t, origin=c, use_radians=True)
+        x0, y0, x1, y1 = r.bounds
+        rects.append({"t": t, "cx": c.x + 0, "cy": c.y + 0, "u": (x0 + x1) / 2 - c.x, "v": (y0 + y1) / 2 - c.y,
+                      "w": round((x1 - x0) * 20) / 20, "h": round((y1 - y0) * 20) / 20})
+    # 3) mřížka: ve skupině se stejným natočením srovnat řady (v) i sloupce (u)
+    groups = collections.defaultdict(list)
+    for i, r in enumerate(rects):
+        groups[(secs[i], round(math.degrees(r["t"]) / 1.5))].append(i)
+    for members in groups.values():
+        t = statistics.median(rects[i]["t"] for i in members)
+        ct, st = math.cos(t), math.sin(t)
+        for ax in ("u", "v"):
+            def coord(i):
+                r = rects[i]; X, Y = r["cx"], r["cy"]
+                return (X * ct + Y * st) + r["u"] if ax == "u" else (-X * st + Y * ct) + r["v"]
+            order = sorted(members, key=coord)
+            clusters, cur = [], [order[0]]
+            for i in order[1:]:
+                if coord(i) - coord(cur[-1]) < 0.22: cur.append(i)
+                else: clusters.append(cur); cur = [i]
+            clusters.append(cur)
+            for cl in clusters:
+                if len(cl) < 2: continue
+                med = statistics.median(coord(i) for i in cl)
+                for i in cl:
+                    d = med - coord(i)
+                    if abs(d) < 0.3: rects[i][ax] += d
+    def poly(r, f=1.0):
+        w, h = max(r["w"] * f - gap, 0.2), max(r["h"] * f - gap, 0.2)
+        b = box(r["u"] - w / 2, r["v"] - h / 2, r["u"] + w / 2, r["v"] + h / 2)
+        b = affinity.rotate(b, r["t"], origin=(0, 0), use_radians=True)
+        return affinity.translate(b, r["cx"], r["cy"])
+    scale = [1.0] * len(rects)
+    out = [poly(r) for r in rects]
+    # 4) překryvy: obě sousední místa jemně zmenšit (nejvýš o 20 %)
+    for _ in range(5):
+        tree = STRtree(out)
+        changed = False
+        for i in range(len(out)):
+            for j in tree.query(out[i]):
+                j = int(j)
+                if j <= i or out[i].intersection(out[j]).area < 1e-4:
+                    continue
+                for k in (i, j):
+                    if scale[k] > 0.8:
+                        scale[k] = round(scale[k] - 0.04, 2); out[k] = poly(rects[k], scale[k]); changed = True
+        if not changed:
+            break
+    return out
+
+
 def _thin(img):
     """Zhang–Suen ztenčení binárního rastru (numpy), vrací kostru o šířce 1 px."""
     import numpy as np
@@ -206,7 +304,7 @@ def build_network(paved, blockers, gates, T, res=0.25):
     return {"nodes": out_nodes, "edges": out_edges}
 
 
-def build(raw, out):
+def build(raw, out, regular=True):
     hr = shape(load(raw, "n_polohopis_hranice_pohrebiste")[0]["geometry"])
     minx, miny, maxx, maxy = hr.bounds
     M = 18.0
@@ -287,14 +385,20 @@ def build(raw, out):
         places = hm.get(str(p["id"]), [])
         free = bool(places) and all(int(x["vyuziti"]) == 0 for x in places)
         g = shape(f["geometry"])
-        rs = polys(g, 0.03)
-        if not rs:
+        if g.is_empty:
             continue
         typ = GTYPE.get(int(p["hrob_typ_kod"]), "hrob")
         note = (p.get("poznamka") or "").strip()
         child = "dětsk" in note.lower()
-        graves.append([code, sec, row, num, typ, 1 if free else 0, len(places), 1 if child else 0, rs[0][0]])
+        graves.append([code, sec, row, num, typ, 1 if free else 0, len(places), 1 if child else 0, g])
         secs[sec].append(g)
+    # zarovnání hrobů (čisté obdélníky, rovné řady, bez překryvů)
+    if regular:
+        aligned = regularize_graves([gr[8] for gr in graves], [gr[1] for gr in graves])
+        for gr, ag in zip(graves, aligned):
+            gr[8] = ag
+    for gr in graves:
+        gr[8] = polys(gr[8], 0.01)[0][0]
 
     # --- sekce: plochy a těžiště popisků ---
     sections = []
@@ -352,8 +456,9 @@ if __name__ == "__main__":
     ap.add_argument("--raw", required=True)
     ap.add_argument("--out", default="data/vitkovice.js")
     ap.add_argument("--fetch", action="store_true")
+    ap.add_argument("--raw-graves", action="store_true", help="nezarovnávat hroby (původní zaměřené tvary)")
     a = ap.parse_args()
     if a.fetch:
         fetch(a.raw)
     else:
-        build(a.raw, a.out)
+        build(a.raw, a.out, regular=not a.raw_graves)
