@@ -422,19 +422,57 @@
       }
     }
 
-    // šipky po trase v konstantním rozestupu na obrazovce (~46 px), přepočet při změně přiblížení
+    // šipky po trase: stálý rozestup na obrazovce (~54 px) a plynulý pohyb ve směru chůze
     placeChevrons() {
       const R = this.route;
-      if (!R || !this.chevG || Math.abs(R.k - this.k) / this.k < 0.03) return;
-      R.k = this.k;
-      const gap = 54 / this.k, s = 1 / this.k;
-      let html = '';
-      for (let l = gap * 0.75, n = 0; l < R.len - gap * 0.4 && n < 400; l += gap, n++) {
-        const a = R.path.getPointAtLength(l), b = R.path.getPointAtLength(Math.min(R.len, l + 1.5));
-        const ang = Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI;
-        html += `<path transform="translate(${a.x.toFixed(1)},${a.y.toFixed(1)}) rotate(${ang.toFixed(1)}) scale(${s.toFixed(4)})" d="M-6 -7.5 L6.5 0 L-6 7.5 L-2.5 0Z"/>`;
+      if (!R || !this.chevG) return;
+      if (!R.samples) {
+        // tvar trasy navzorkovat jednou (každé 2 dm), animace pak jen posouvá šipky
+        R.samples = [];
+        for (let l = 0; l <= R.len; l += 2) {
+          const a = R.path.getPointAtLength(l), b = R.path.getPointAtLength(Math.min(R.len, l + 1.5));
+          R.samples.push([a.x, a.y, Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI]);
+        }
       }
+      if (Math.abs(R.k - this.k) / this.k < 0.03 && R.nodes) return;
+      R.k = this.k;
+      R.gap = 54 / this.k;
+      const count = Math.min(400, Math.ceil(R.len / R.gap) + 1);
+      let html = '';
+      for (let i = 0; i < count; i++) html += '<path d="M-6 -7.5 L6.5 0 L-6 7.5 L-2.5 0Z"/>';
       this.chevG.innerHTML = html;
+      R.nodes = [...this.chevG.children];
+      this.moveChevrons(performance.now());
+      this.startChevronLoop();
+    }
+
+    moveChevrons(now) {
+      const R = this.route;
+      if (!R || !R.nodes) return;
+      const still = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      // rychlost ~32 px/s na obrazovce
+      const phase = still ? R.gap * 0.75 : ((now / 1000) * (32 / this.k)) % R.gap;
+      const s = (1 / this.k).toFixed(4), S = R.samples, end = R.len - R.gap * 0.35;
+      R.nodes.forEach((n, i) => {
+        const l = phase + i * R.gap;
+        if (l < R.gap * 0.3 || l > end) { n.setAttribute('visibility', 'hidden'); return; }
+        const p = S[Math.min(S.length - 1, Math.round(l / 2))];
+        // jemné zeslábnutí u startu a cíle
+        const fade = Math.min(1, (l - R.gap * 0.3) / (R.gap * 0.5), (end - l) / (R.gap * 0.5));
+        n.setAttribute('visibility', 'visible');
+        n.setAttribute('opacity', fade.toFixed(2));
+        n.setAttribute('transform', `translate(${p[0].toFixed(1)},${p[1].toFixed(1)}) rotate(${p[2].toFixed(1)}) scale(${s})`);
+      });
+    }
+
+    startChevronLoop() {
+      if (this._chevLoop) return;
+      const tick = (now) => {
+        if (!this.route) { this._chevLoop = null; return; }
+        this.moveChevrons(now);
+        this._chevLoop = requestAnimationFrame(tick);
+      };
+      this._chevLoop = requestAnimationFrame(tick);
     }
 
     focusGrave(g) { this.flyTo({ x: g.cx - 160, y: g.cy - 140, w: 320, h: 260 }, 16); }
