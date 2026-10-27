@@ -312,8 +312,13 @@
         if (t < 1) this._raf = requestAnimationFrame(step);
       };
       this._raf = requestAnimationFrame(step);
+      // pojistka: na kartě na pozadí prohlížeč animace pozastaví – dojet rovnou na cíl
+      clearTimeout(this._animGuard);
+      this._animGuard = setTimeout(() => {
+        if (this._raf && this.k !== k) { cancelAnimationFrame(this._raf); this._raf = null; this.k = k; this.x = x; this.y = y; this.apply(); }
+      }, dur + 250);
     }
-    stopAnim() { if (this._raf) cancelAnimationFrame(this._raf); this._raf = null; }
+    stopAnim() { if (this._raf) cancelAnimationFrame(this._raf); this._raf = null; clearTimeout(this._animGuard); }
 
     // ---------- Stav: výběr, trasa, zvýraznění ----------
     highlight(ids) {
@@ -372,7 +377,7 @@
       if (focus !== false) {
         let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
         for (const q of r.pts) { x0 = Math.min(x0, q.x); y0 = Math.min(y0, q.y); x1 = Math.max(x1, q.x); y1 = Math.max(y1, q.y); }
-        this.flyTo({ x: x0 - 60, y: y0 - 140, w: x1 - x0 + 120, h: y1 - y0 + 200 }, 10);
+        this.flyTo({ x: x0 - 160, y: y0 - 160, w: x1 - x0 + 320, h: y1 - y0 + 220 }, 10);
       }
     }
 

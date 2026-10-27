@@ -18,7 +18,7 @@
   const graveCode = (g) => g.id;
   const TYPE = { hrob: 'Hrob', dvojhrob: 'Dvojhrob', trojhrob: 'Trojhrob', vicehrob: 'Vícehrob', hrobka: 'Hrobka', urnovy: 'Urnový hrob', kolumbarium: 'Kolumbárium', vsyp: 'Vsypové místo' };
   const SEC_IDS = D.sections.map((s) => s.id).sort((a, b) => b.length - a.length);
-  const hashFor = (g) => `#hrob=${encodeURIComponent(g.id)}${state.start !== 'main' ? '&start=' + state.start : ''}`;
+  const hashFor = (g) => `#hrob=${encodeURIComponent(g.id)}${state.start !== 'auto' && state.start !== 'gps' ? '&start=' + state.start : ''}`;
   // ukázkové dotazy z aktuálních dat
   const EXAMPLES = (() => {
     const cnt = {};
@@ -62,7 +62,7 @@
   if (KIOSK) document.documentElement.classList.add('kiosk');
   const state = {
     view: 'home', res: null, resLimit: 40, query: '', grave: null, route: null,
-    start: KIOSK || !D.GATES[store.get('start', 'main')] ? 'main' : store.get('start', 'main'), from: null,
+    start: KIOSK ? 'main' : (D.GATES[store.get('start', 'auto')] ? store.get('start', 'auto') : 'auto'), from: null,
     favs: store.get('favs', []), candles: store.get('candles', []), user: store.get('user', null),
     filters: { sec: '', from: '', to: '' }, sheet: 'min'
   };
@@ -312,11 +312,7 @@
     const leaseCell = state.user
       ? `<b>${g.lease ? 'do ' + fmt(g.lease) : '—'}</b>`
       : `<span class="lock">${I.lock} po přihlášení</span>`;
-    return `
-      <button class="back" data-act="back">${I.back}${backLbl}</button>
-      <div class="eyebrow">Hrobové místo ${graveCode(g)}</div>
-      <div class="loc-strip"><span>Sekce <b>${g.sec}</b></span><span>Řada <b>${g.row}</b></span><span>Hrob <b>${g.num}</b></span></div>
-      ${people}
+    const actionsHtml = `
       <div class="actions">
         ${mobile() && !KIOSK
           ? `<button class="btn primary wide" data-act="${navigator.share ? 'share' : 'qr'}">${I.phone}Sdílet trasu s rodinou</button>`
@@ -324,15 +320,24 @@
         <button class="btn ${fav ? 'on' : ''}" data-act="fav">${fav ? I.starF : I.star}${fav ? 'Uloženo' : 'Uložit'}</button>
         <button class="btn ${lit ? 'on' : ''}" data-act="candle" ${g.status === 'volne' ? 'disabled' : ''}>${I.candle}${lit ? 'Svíčka hoří' : 'Zapálit svíčku'}</button>
       </div>
+`;
+    const routeHtml = `
       <div class="route-card">
         <div class="route-top">
-          <div class="route-sum"><b>${r.m} m</b><span>≈ ${r.min} min chůze</span></div>
+          <div class="route-sum"><b>${r.m} m</b><span>≈ ${r.min} min chůze</span><small>${r.gate === 'gps' ? 'Od vaší polohy (GPS)' : (state.start === 'auto' ? 'Nejkratší trasa: ' : 'Od: ') + D.GATES[r.gate].label}</small></div>
           <div class="seg" role="group" aria-label="Výchozí místo">
-            ${Object.entries(D.GATES).map(([k, gt]) => `<button class="${state.start === k ? 'on' : ''}" data-act="start" data-s="${k}">${gt.btn}</button>`).join('')}
+            ${[...(state.here ? [['gps', 'Moje poloha']] : []), ['auto', 'Nejbližší'], ...Object.entries(D.GATES).map(([k, gt]) => [k, gt.btn])].map(([k, lbl]) => `<button class="${state.start === k ? 'on' : ''}" data-act="start" data-s="${k}">${lbl}</button>`).join('')}
           </div>
         </div>
         <ol class="steps">${r.steps.map((s) => `<li class="${s.kind}"><span class="si">${stepIcon(s.kind)}</span><span>${esc(s.text)}</span><span class="m">${s.m ? s.m + ' m' : ''}</span></li>`).join('')}</ol>
       </div>
+`;
+    return `
+      <button class="back" data-act="back">${I.back}${backLbl}</button>
+      <div class="eyebrow">Hrobové místo ${graveCode(g)}</div>
+      <div class="loc-strip"><span>Sekce <b>${g.sec}</b></span><span>Řada <b>${g.row}</b></span><span>Hrob <b>${g.num}</b></span></div>
+      ${people}
+      ${mobile() && !KIOSK ? routeHtml + actionsHtml : actionsHtml + routeHtml}
       <div class="meta">
         <div><small>Typ</small><b>${TYPE[g.type]}</b></div>
         <div><small>Nájem</small>${g.status === 'volne' ? '<b>volné</b>' : leaseCell}</div>
@@ -478,14 +483,14 @@
     if (!g) return;
     state.grave = g;
     state.from = (opts && opts.from) || (state.view === 'grave' ? state.from : state.view);
-    state.route = D.route(g.id, state.start);
+    state.route = D.route(g.id, state.start, state.here);
     show('grave');
     const ps = D.byGrave[g.id];
     const label = g.status === 'volne' ? 'Volné místo' : ps.length ? (ps.length > 1 ? `Rodina ${familyName(ps)}` : `${ps[0].first} ${ps[0].last}`) : graveCode(g);
     map.select(g, label);
     if (state.from !== 'results') map.highlight(null);
     if (mobile()) setSheet('mid');
-    requestAnimationFrame(() => map.showRoute(state.route));
+    setTimeout(() => map.showRoute(state.route), 0);
     history.replaceState(null, '', hashFor(g));
   }
 
@@ -572,8 +577,8 @@
         break;
       }
       case 'start':
-        state.start = a.dataset.s; store.set('start', state.start);
-        state.route = D.route(state.grave.id, state.start);
+        state.start = a.dataset.s; if (state.start !== 'gps') store.set('start', state.start);
+        state.route = D.route(state.grave.id, state.start, state.here);
         body.querySelector('.view').innerHTML = vGrave();
         map.showRoute(state.route);
         history.replaceState(null, '', hashFor(state.grave));
@@ -631,7 +636,7 @@
     return D.fromSJTSK(ex, ny);
   }
   function locate(btn) {
-    if (watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; btn.classList.remove('on'); map.youAreHere(null); return; }
+    if (watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; btn.classList.remove('on'); map.youAreHere(null); state.here = null; if (state.start === 'gps') state.start = 'auto'; return; }
     if (!navigator.geolocation || !window.proj4) { toast('Poloha není v tomto zařízení dostupná'); return; }
     btn.classList.add('on');
     let first = true;
@@ -643,7 +648,14 @@
         first = false; return;
       }
       map.youAreHere(p, 'Vy');
-      if (first) map.flyTo({ x: p.x - 250, y: p.y - 200, w: 500, h: 400 }, 14);
+      const moved = !state.here || Math.hypot(state.here.x - p.x, state.here.y - p.y) > 50;
+      state.here = p;
+      if (state.view === 'grave' && state.grave && (first || (state.start === 'gps' && moved))) {
+        state.start = 'gps';
+        state.route = D.route(state.grave.id, 'gps', p);
+        body.querySelector('.view').innerHTML = vGrave();
+        map.showRoute(state.route, first);
+      } else if (first) map.flyTo({ x: p.x - 250, y: p.y - 200, w: 500, h: 400 }, 14);
       first = false;
     }, () => { toast('Polohu se nepodařilo zjistit'); btn.classList.remove('on'); watchId = null; }, { enableHighAccuracy: true, maximumAge: 5000 });
   }
@@ -710,7 +722,7 @@
   function applyHash() {
     const hp = new URLSearchParams(location.hash.slice(1));
     const hrob = hp.get('hrob');
-    if (D.GATES[hp.get('start')]) state.start = hp.get('start');
+    if (D.GATES[hp.get('start')] || hp.get('start') === 'auto') state.start = hp.get('start');
     if (hrob) {
       const g = D.graveById[hrob] || D.graves.find((x) => x.id.toUpperCase() === hrob.toUpperCase());
       if (g) { openGrave(g.id, { from: 'home' }); return true; }

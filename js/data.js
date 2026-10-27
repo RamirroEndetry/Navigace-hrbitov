@@ -142,7 +142,7 @@
   // ---------- Mřížka pro trasování (0,4 m) ----------
   const R = 4, GW = Math.ceil(W / R), GH = Math.ceil(H / R);
   let cost = null, reach = null;
-  // 0 = neprůchozí, 1 = zpevněná cesta, 3 = tráva / ulička mezi hroby
+  // 0 = neprůchozí, 1 = zpevněná cesta, 3 = tráva / ulička mezi hroby (+1 u hrany překážky)
   function fill(rings, val) {
     let y0 = Infinity, y1 = -Infinity;
     for (const r of rings) for (let i = 1; i < r.length; i += 2) { if (r[i] < y0) y0 = r[i]; if (r[i] > y1) y1 = r[i]; }
@@ -182,6 +182,13 @@
     for (const k of ['building', 'monument', 'wall', 'shrub', 'flower', 'tech']) for (const p of A[k] || []) fill(p, 0);
     for (const k of ['wall', 'fence', 'hedge', 'rail']) for (const l of V.lines[k] || []) stroke(l, 0);
     for (const g of graves) fill([g.ring], 0);
+    // okraj u překážky (0,4 m): 1 → 2 (chodník u hrany), 3 → 4 (tráva u hrany)
+    const edge = new Uint8Array(GW * GH);
+    for (let y = 1; y < GH - 1; y++) for (let x = 1; x < GW - 1; x++) {
+      const i = y * GW + x;
+      if (cost[i] && (!cost[i - 1] || !cost[i + 1] || !cost[i - GW] || !cost[i + GW] || !cost[i - GW - 1] || !cost[i - GW + 1] || !cost[i + GW - 1] || !cost[i + GW + 1])) edge[i] = 1;
+    }
+    for (let i = 0; i < edge.length; i++) if (edge[i]) cost[i] += 1;
     // dosažitelná oblast z hlavního vchodu (oplocená místa bez průchodu se vynechají)
     reach = null;
     const s = nearestWalkable(GATES.main.x, GATES.main.y, 40);
@@ -207,7 +214,7 @@
         if (cx < 0 || cy < 0 || cx >= GW || cy >= GH) continue;
         const c = cost[cy * GW + cx];
         if (!c || (reach && !reach[cy * GW + cx])) continue;
-        const d = dx * dx + dy * dy + (c === 1 ? 0 : 0.5);
+        const d = dx * dx + dy * dy + (c - 1) * 0.3;
         if (d < bd) { bd = d; best = cy * GW + cx; }
       }
       if (best >= 0) return best;
@@ -215,6 +222,8 @@
     return -1;
   }
 
+  // váha buňky: chodník, chodník u hrany, tráva/ulička, tráva u hrany
+  const WT = [0, 1, 1.6, 3, 3.6];
   let G, F, P, STAMP, stamp = 0;
   function astar(s, t) {
     const n = GW * GH;
@@ -248,7 +257,7 @@
         const v = vy * GW + vx, c = cost[v];
         if (!c) continue;
         if (dx && dy && (!cost[uy * GW + vx] || !cost[vy * GW + ux])) continue;
-        const ng = G[u] + dd * (c + cost[u]) / 2;
+        const ng = G[u] + dd * (WT[c] + WT[cost[u]]) / 2;
         if (STAMP[v] !== stamp || ng < G[v]) { STAMP[v] = stamp; G[v] = ng; P[v] = u; push(v, ng + h(v)); }
       }
     }
@@ -261,20 +270,31 @@
   function clearLine(a, b) {
     const ax = a % GW + 0.5, ay = ((a / GW) | 0) + 0.5, bx = b % GW + 0.5, by = ((b / GW) | 0) + 0.5;
     const ca = Math.max(cost[a], cost[b]);
-    const n = Math.ceil(Math.hypot(bx - ax, by - ay) * 2);
+    // jemné vzorkování + kontrola okolí bodu (± 0,15 buňky), aby linie neřízla roh překážky
+    const n = Math.ceil(Math.hypot(bx - ax, by - ay) * 5);
     for (let s = 1; s < n; s++) {
-      const c = cost[Math.floor(ay + (by - ay) * s / n) * GW + Math.floor(ax + (bx - ax) * s / n)];
-      if (!c || c > ca) return false;
+      const x = ax + (bx - ax) * s / n, y = ay + (by - ay) * s / n;
+      for (const [ox, oy] of [[0, 0], [0.15, 0.15], [-0.15, 0.15], [0.15, -0.15], [-0.15, -0.15]]) {
+        const c = cost[Math.floor(y + oy) * GW + Math.floor(x + ox)];
+        if (!c || c > ca) return false;
+      }
     }
     return true;
   }
   function smooth(path) {
     const out = [path[0]];
     let i = 0;
-    while (i < path.length - 1) {
-      let j = Math.min(path.length - 1, i + 400);
-      while (j > i + 1 && !clearLine(path[i], path[j])) j--;
-      out.push(path[j]); i = j;
+    const last = path.length - 1;
+    while (i < last) {
+      // cválání vpřed a pak binární hledání nejvzdálenějšího viditelného bodu
+      let ok = i + 1, step = 2, bad = -1;
+      while (ok + step <= last && step <= 512) {
+        if (clearLine(path[i], path[ok + step])) { ok += step; step *= 2; } else { bad = ok + step; break; }
+      }
+      let hi = bad < 0 ? Math.min(last, ok + step) : bad;
+      if (hi > ok && clearLine(path[i], path[hi])) ok = hi;
+      else while (hi - ok > 1) { const mid = (ok + hi) >> 1; if (clearLine(path[i], path[mid])) ok = mid; else hi = mid; }
+      out.push(path[ok]); i = ok;
     }
     return out;
   }
@@ -288,66 +308,92 @@
     return bd < 260 ? best : null;
   }
 
+  // Douglas–Peucker: zjednodušení jen pro textové pokyny (nakreslená trasa zůstává přesná)
+  function simplify(pts, tol) {
+    if (pts.length < 3) return pts.slice();
+    const keep = new Uint8Array(pts.length); keep[0] = keep[pts.length - 1] = 1;
+    const stack = [[0, pts.length - 1]];
+    while (stack.length) {
+      const [i, j] = stack.pop();
+      const a = pts[i], b = pts[j], L = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      let md = 0, mk = -1;
+      for (let k = i + 1; k < j; k++) {
+        const d = Math.abs((b.x - a.x) * (a.y - pts[k].y) - (a.x - pts[k].x) * (b.y - a.y)) / L;
+        if (d > md) { md = d; mk = k; }
+      }
+      if (md > tol) { keep[mk] = 1; stack.push([i, mk], [mk, j]); }
+    }
+    return pts.filter((_, i) => keep[i]);
+  }
+  const dist = (a, b) => Math.hypot(b.x - a.x, b.y - a.y);
+
   const cache = {};
-  function route(graveId, startKey) {
+  function route(graveId, startKey, at) {
+    if (startKey === 'gps' && at) return routeFrom(graveId, 'gps', { x: at.x, y: at.y, label: 'Moje poloha', short: 'od místa, kde stojíte' });
+    if (startKey === 'auto' || !GATES[startKey]) {
+      let best = null;
+      for (const k of Object.keys(GATES)) { const r = route(graveId, k); if (r.ok && (!best || r.u < best.u)) best = r; }
+      return best || route(graveId, 'main');
+    }
     const key = graveId + '|' + startKey;
     if (cache[key]) return cache[key];
+    return (cache[key] = routeFrom(graveId, startKey, GATES[startKey]));
+  }
+
+  function routeFrom(graveId, startKey, gate) {
     if (!cost) buildGrid();
     const g = graveById[graveId];
-    const gate = GATES[startKey] || GATES.main;
     const s = nearestWalkable(gate.x, gate.y, 60), t = nearestWalkable(g.cx, g.cy, 160);
-    let raw = s >= 0 && t >= 0 ? astar(s, t) : null;
-    let pts;
-    if (raw) pts = [{ x: gate.x, y: gate.y }, ...smooth(raw).map(toPt)];
-    else pts = [{ x: gate.x, y: gate.y }, { x: g.cx, y: g.cy }];
-    const end = pts[pts.length - 1];
+    const raw = s >= 0 && t >= 0 ? astar(s, t) : null;
+    const pts = [{ x: gate.x, y: gate.y }];
+    if (raw) pts.push(...smooth(raw).map(toPt));
     // poslední krok k hrobu: na nejbližší bod obrysu
+    const end = pts[pts.length - 1];
     let ex = g.cx, ey = g.cy, ed = Infinity;
     for (let i = 0; i < g.ring.length; i += 2) {
       const d = Math.hypot(g.ring[i] - end.x, g.ring[i + 1] - end.y);
       if (d < ed) { ed = d; ex = g.ring[i]; ey = g.ring[i + 1]; }
     }
-    // sloučit krátké a téměř rovné úseky
-    const seg = [pts[0]];
-    for (let i = 1; i < pts.length; i++) {
-      const p = pts[i], last = seg[seg.length - 1];
-      if (Math.hypot(p.x - last.x, p.y - last.y) < 40 && i < pts.length - 1) continue;
-      if (seg.length >= 2) {
-        const a = seg[seg.length - 2];
-        const a1 = Math.atan2(last.y - a.y, last.x - a.x), a2 = Math.atan2(p.y - last.y, p.x - last.x);
-        let da = Math.abs(a2 - a1); if (da > Math.PI) da = 2 * Math.PI - da;
-        if (da < 0.58) { seg[seg.length - 1] = p; continue; }
-      }
-      seg.push(p);
-    }
+    pts.push({ x: ex, y: ey });
     let total = 0;
-    const steps = [{ kind: 'start', text: `Vstupte ${gate.short}` }];
-    for (let i = 1; i < seg.length; i++) {
-      const a = seg[i - 1], b = seg[i];
-      const len = Math.hypot(b.x - a.x, b.y - a.y);
-      total += len;
-      if (i === 1) { steps.push({ kind: 'straight', text: 'Pokračujte rovně', u: len }); continue; }
-      const p = seg[i - 2];
+    for (let i = 1; i < pts.length; i++) total += dist(pts[i - 1], pts[i]);
+
+    // ---- pokyny: úseky mezi zatáčkami nad 30° ----
+    const sp = simplify(pts.slice(0, -1), 15);
+    const legs = [];
+    let acc = 0, turn = null;
+    for (let i = 1; i < sp.length; i++) {
+      acc += dist(sp[i - 1], sp[i]);
+      if (i === sp.length - 1) break;
+      const p = sp[i - 1], a = sp[i], b = sp[i + 1];
       const cross = (a.x - p.x) * (b.y - a.y) - (a.y - p.y) * (b.x - a.x);
-      const kind = cross > 0 ? 'right' : 'left';
       const ang = Math.abs(Math.atan2(cross, (a.x - p.x) * (b.x - a.x) + (a.y - p.y) * (b.y - a.y)));
-      const prev = steps[steps.length - 1];
-      // krátký úsek (do 6 m) nepojmenovávat zvlášť – přičíst k předchozímu kroku
-      if (len < 60) { prev.u += len; continue; }
-      const sec = nearestSection(a.x, a.y);
-      const verb = ang < 0.8 ? `Držte se ${kind === 'right' ? 'vpravo' : 'vlevo'}` : `Odbočte ${kind === 'right' ? 'vpravo' : 'vlevo'}`;
-      if (prev.kind === kind && prev.u < 80 && prev.kind !== 'straight') { prev.u += len; prev.text = `Pokračujte ${kind === 'right' ? 'vpravo' : 'vlevo'}${sec ? ' u sekce ' + sec.id : ''}`; continue; }
-      steps.push({ kind, text: sec ? `${verb} u sekce ${sec.id}` : verb, u: len });
+      if (ang < 0.52) continue;
+      legs.push({ turn, u: acc });
+      // orientační bod: sekce kousek za zatáčkou
+      const L = dist(a, b) || 1, ahead = { x: a.x + (b.x - a.x) * Math.min(1, 80 / L), y: a.y + (b.y - a.y) * Math.min(1, 80 / L) };
+      turn = { dir: cross > 0 ? 'right' : 'left', sharp: ang > 0.85, back: ang > 2.4, sec: nearestSection(ahead.x, ahead.y) };
+      acc = 0;
     }
-    for (const st of steps) if (st.u != null) { st.m = roundM(meters(st.u)); delete st.u; }
-    total += ed;
-    const a = seg[Math.max(0, seg.length - 2)], b = seg[seg.length - 1];
-    const cr = (b.x - a.x) * (g.cy - b.y) - (b.y - a.y) * (g.cx - b.x);
+    legs.push({ turn, u: acc });
+    // krátké úseky (do 5 m) přičíst k následujícímu – obloučky a odsazení cest
+    for (let i = legs.length - 2; i >= 1; i--) if (legs[i].u < 50) { legs[i + 1].u += legs[i].u; if (!legs[i + 1].turn) legs[i + 1].turn = legs[i].turn; legs.splice(i, 1); }
+    // poslední krátký úsek (do 5 m) je jen „přistoupení k hrobu“ – přičíst k předchozímu
+    if (legs.length > 1 && legs[legs.length - 1].u < 50) legs[legs.length - 2].u += legs.pop().u;
+    const steps = [{ kind: 'start', text: startKey === 'gps' ? 'Vyjděte od místa, kde stojíte' : `Vstupte ${gate.short}` }];
+    for (const l of legs) {
+      const m = roundM(meters(l.u));
+      if (!l.turn) { steps.push({ kind: 'straight', text: 'Pokračujte rovně', m }); continue; }
+      const side = l.turn.dir === 'right' ? 'vpravo' : 'vlevo';
+      const verb = l.turn.back ? 'Otočte se' : l.turn.sharp ? `Odbočte ${side}` : `Držte se ${side}`;
+      steps.push({ kind: l.turn.dir, text: l.turn.sec ? `${verb} k sekci ${l.turn.sec.id}` : verb, m });
+    }
+    const la = sp[Math.max(0, sp.length - 2)], lb = sp[sp.length - 1];
+    const cr = (lb.x - la.x) * (g.cy - lb.y) - (lb.y - la.y) * (g.cx - lb.x);
     const side = ed < 12 ? 'přímo před vámi' : cr > 0 ? 'po vaší pravé straně' : 'po vaší levé straně';
     steps.push({ kind: 'finish', text: `Hrob ${g.num} v sekci ${g.sec} je ${side}` });
-    seg.push({ x: ex, y: ey });
     const m = roundM(meters(total));
-    return (cache[key] = { pts: seg, steps, m, min: Math.max(1, Math.round(m / 70)) });
+    return { ok: !!raw, gate: startKey, u: total, pts, steps, m, min: Math.max(1, Math.round(m / 70)) };
   }
 
   // ---------- Pohřby (relativně k dnešku) ----------

@@ -99,7 +99,7 @@ input, select { font: inherit; color: inherit; }
 .poi-dot { stroke: #fff; stroke-width: 2; filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, .25)); }
 .poi:hover .poi-dot { stroke-width: 3; }
 .poi-bin, .poi-bench, .poi-memorial { display: none; }
-.lod-mid .poi-bin, .lod-mid .poi-bench, .lod-mid .poi-memorial { display: inline; }
+.lod-near .poi-bin, .lod-near .poi-bench, .lod-near .poi-memorial { display: inline; }
 .hide-water .layer-water, .hide-bin .layer-bin, .hide-bench .layer-bench, .hide-pano .layer-pano, .hide-service .layer-service { display: none !important; }
 .hide-trees .trees { display: none; }
 .sec-label { cursor: pointer; }
@@ -316,6 +316,7 @@ mark { background: var(--accent-soft); color: inherit; border-radius: 3px; paddi
 .route-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; padding: 14px 16px 12px; gap: 10px; }
 .route-sum b { font: 400 26px var(--serif); }
 .route-sum { white-space: nowrap; }
+.route-sum small { display: block; font-size: 12.5px; font-weight: 700; color: var(--forest); margin-top: 2px; }
 .route-sum span { color: var(--muted); font-weight: 700; font-size: 12.5px; margin-left: 6px; }
 .seg { display: inline-flex; background: var(--paper); border-radius: 11px; padding: 3px; }
 .seg button { border: 0; background: transparent; padding: 6px 10px; border-radius: 8px; font-size: 12.5px; font-weight: 800; color: var(--ink-2); white-space: nowrap; }
