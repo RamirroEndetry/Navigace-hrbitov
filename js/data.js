@@ -301,6 +301,7 @@
   const toPt = (i) => ({ x: (i % GW) * R + R / 2, y: ((i / GW) | 0) * R + R / 2 });
   const meters = (u) => Math.max(1, Math.round(u * M_PER_UNIT));
   const roundM = (m) => (m < 20 ? m : Math.round(m / 5) * 5);
+  const dist = (a, b) => Math.hypot(b.x - a.x, b.y - a.y);
 
   function nearestSection(x, y) {
     let best = null, bd = Infinity;
@@ -308,7 +309,102 @@
     return bd < 260 ? best : null;
   }
 
-  // Douglas–Peucker: zjednodušení jen pro textové pokyny (nakreslená trasa zůstává přesná)
+  // ---------- Síť os cest (graf) ----------
+  // Hlavní část trasy vede středem cest po této síti; jen poslední úsek k hrobu jde uličkou mezi hroby.
+  const NET = { nodes: V.net.nodes.map(([x, y]) => ({ x, y, adj: [] })), edges: [] };
+  V.net.edges.forEach(([a, b, w, flat], i) => {
+    const pts = [];
+    for (let k = 0; k < flat.length; k += 2) pts.push({ x: flat[k], y: flat[k + 1] });
+    const cum = [0];
+    for (let k = 1; k < pts.length; k++) cum.push(cum[k - 1] + dist(pts[k - 1], pts[k]));
+    const len = cum[cum.length - 1];
+    // úzké pásky mezi hroby jen v nouzi, hlavní aleje mírně preferovat
+    const wf = w < 15 ? 3 : w < 25 ? 1.15 : 1;
+    NET.edges.push({ a, b, w, pts, cum, len, wf });
+    NET.nodes[a].adj.push(i); NET.nodes[b].adj.push(i);
+  });
+  function pointAt(e, off) {
+    off = Math.max(0, Math.min(e.len, off));
+    let k = 1;
+    while (k < e.cum.length - 1 && e.cum[k] < off) k++;
+    const t = (off - e.cum[k - 1]) / ((e.cum[k] - e.cum[k - 1]) || 1);
+    return { x: e.pts[k - 1].x + (e.pts[k].x - e.pts[k - 1].x) * t, y: e.pts[k - 1].y + (e.pts[k].y - e.pts[k - 1].y) * t };
+  }
+  // úsek hrany mezi dvěma offsety (ve směru o1 -> o2)
+  function slice(e, o1, o2) {
+    const out = [pointAt(e, o1)];
+    if (o1 < o2) { for (let k = 0; k < e.pts.length; k++) if (e.cum[k] > o1 && e.cum[k] < o2) out.push(e.pts[k]); }
+    else { for (let k = e.pts.length - 1; k >= 0; k--) if (e.cum[k] < o1 && e.cum[k] > o2) out.push(e.pts[k]); }
+    out.push(pointAt(e, o2));
+    return out;
+  }
+  // buňky mřížky ležící na ose cesty -> (hrana, offset)
+  let netCell = null, netOff = null;
+  function rasterNet() {
+    netCell = new Int32Array(GW * GH); netOff = new Float32Array(GW * GH);
+    NET.edges.forEach((e, ei) => {
+      for (let off = 0; off <= e.len; off += 1.5) {
+        const p = pointAt(e, off), i = idx(p.x, p.y);
+        if (i >= 0 && i < netCell.length && cost[i] && (!netCell[i] || NET.edges[netCell[i] - 1].wf > e.wf)) { netCell[i] = ei + 1; netOff[i] = off; }
+      }
+    });
+  }
+
+  // omezený Dijkstra na mřížce z bodu – najde místa, kde se lze napojit na síť cest
+  function attach(x, y, limit, windowCells) {
+    if (!cost) buildGrid();
+    if (!netCell) rasterNet();
+    const s = nearestWalkable(x, y, 160);
+    if (s < 0) return null;
+    const n = GW * GH;
+    if (!G) { G = new Float32Array(n); F = new Int32Array(n); P = new Int32Array(n); STAMP = new Int32Array(n); }
+    stamp++;
+    const heap = [], hf = [];
+    const push = (i, f) => { heap.push(i); hf.push(f); let k = heap.length - 1; while (k > 0) { const p = (k - 1) >> 1; if (hf[p] <= hf[k]) break; [heap[p], heap[k]] = [heap[k], heap[p]]; [hf[p], hf[k]] = [hf[k], hf[p]]; k = p; } };
+    const pop = () => { const top = heap[0], li = heap.pop(), lf = hf.pop(); if (heap.length) { heap[0] = li; hf[0] = lf; let k = 0; for (;;) { const l = 2 * k + 1, r = l + 1; let m = k; if (l < heap.length && hf[l] < hf[m]) m = l; if (r < heap.length && hf[r] < hf[m]) m = r; if (m === k) break; [heap[m], heap[k]] = [heap[k], heap[m]]; [hf[m], hf[k]] = [hf[k], hf[m]]; k = m; } } return top; };
+    G[s] = 0; STAMP[s] = stamp; P[s] = -1; push(s, 0);
+    const cands = [];
+    let firstHit = Infinity;
+    const DIRS = [[1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1], [1, 1, Math.SQRT2], [1, -1, Math.SQRT2], [-1, 1, Math.SQRT2], [-1, -1, Math.SQRT2]];
+    while (heap.length) {
+      const u = pop();
+      if (F[u] === stamp) continue;
+      F[u] = stamp;
+      const gu = G[u];
+      if (gu > limit || gu > firstHit + (windowCells || 60)) break;
+      if (netCell[u]) { cands.push({ cell: u, e: netCell[u] - 1, off: netOff[u], gd: gu * R }); if (firstHit === Infinity) firstHit = gu; }
+      const ux = u % GW, uy = (u / GW) | 0;
+      for (const [dx, dy, dd] of DIRS) {
+        const vx = ux + dx, vy = uy + dy;
+        if (vx < 0 || vy < 0 || vx >= GW || vy >= GH) continue;
+        const v = vy * GW + vx, c = cost[v];
+        if (!c) continue;
+        if (dx && dy && (!cost[uy * GW + vx] || !cost[vy * GW + ux])) continue;
+        const ng = gu + dd * (WT[c] + WT[cost[u]]) / 2;
+        if (STAMP[v] !== stamp || ng < G[v]) { STAMP[v] = stamp; G[v] = ng; P[v] = u; push(v, ng); }
+      }
+    }
+    // na každé hraně stačí nejlepší kandidát po 2 m
+    const bestBy = new Map();
+    for (const c of cands) { const k = c.e * 100000 + Math.round(c.off / 20); const o = bestBy.get(k); if (!o || c.gd < o.gd) bestBy.set(k, c); }
+    const kept = [...bestBy.values()];
+    // cesta z každého kandidáta zpět k výchozí buňce (posbírat hned – pole se sdílí)
+    for (const c of kept) { const ch = []; for (let i = c.cell; i !== -1; i = P[i]) ch.push(i); c.chain = ch; }
+    return { s, cands: kept };
+  }
+
+  const endCache = {}, startCache = {};
+  function graveEnd(g) {
+    if (!endCache[g.id]) {
+      let a = attach(g.cx, g.cy, 260);
+      // daleko od zpevněných cest (např. urnový háj): hledat dál po trávě
+      if (!a || !a.cands.length) a = attach(g.cx, g.cy, 2500, 120);
+      endCache[g.id] = a;
+    }
+    return endCache[g.id];
+  }
+
+  // Douglas–Peucker (jen pro textové pokyny)
   function simplify(pts, tol) {
     if (pts.length < 3) return pts.slice();
     const keep = new Uint8Array(pts.length); keep[0] = keep[pts.length - 1] = 1;
@@ -325,7 +421,11 @@
     }
     return pts.filter((_, i) => keep[i]);
   }
-  const dist = (a, b) => Math.hypot(b.x - a.x, b.y - a.y);
+  function dedupe(pts) {
+    const out = [];
+    for (const p of pts) if (!out.length || dist(out[out.length - 1], p) > 0.5) out.push(p);
+    return out;
+  }
 
   const cache = {};
   function route(graveId, startKey, at) {
@@ -343,57 +443,147 @@
   function routeFrom(graveId, startKey, gate) {
     if (!cost) buildGrid();
     const g = graveById[graveId];
-    const s = nearestWalkable(gate.x, gate.y, 60), t = nearestWalkable(g.cx, g.cy, 160);
-    const raw = s >= 0 && t >= 0 ? astar(s, t) : null;
-    const pts = [{ x: gate.x, y: gate.y }];
-    if (raw) pts.push(...smooth(raw).map(toPt));
-    // poslední krok k hrobu: na nejbližší bod obrysu
-    const end = pts[pts.length - 1];
+    const end = graveEnd(g);
+
+    // --- napojení startu na síť ---
+    // vchod i GPS: volný průchod po zpevněné ploše (např. přes prostranství) až na osu cesty
+    const sa = startCache[startKey] || attach(gate.x, gate.y, 500, 250);
+    if (startKey !== 'gps') startCache[startKey] = sa;
+    const starts = sa ? sa.cands.map((c) => ({ e: c.e, off: c.off, gd: c.gd, chain: c.chain })) : [];
+    const fallback = { ok: false, gate: startKey, u: Infinity, pts: [{ x: gate.x, y: gate.y }, { x: g.cx, y: g.cy }], steps: [{ kind: 'finish', text: 'Trasu se nepodařilo spočítat' }], m: 0, min: 0 };
+    if (!end || !end.cands.length || !starts.length) return fallback;
+
+    // --- Dijkstra po síti (více zdrojů) ---
+    const N = NET.nodes.length, D = new Float64Array(N).fill(Infinity), prev = new Int32Array(N).fill(-1), via = new Int32Array(N).fill(-1), src = new Int32Array(N).fill(-1);
+    starts.forEach((s, si) => {
+      const e = NET.edges[s.e];
+      for (const [node, d] of [[e.a, s.gd + s.off * e.wf], [e.b, s.gd + (e.len - s.off) * e.wf]]) {
+        if (d < D[node]) { D[node] = d; src[node] = si; prev[node] = -1; via[node] = s.e; }
+      }
+    });
+    const done = new Uint8Array(N);
+    for (;;) {
+      let u = -1;
+      for (let i = 0; i < N; i++) if (!done[i] && D[i] < Infinity && (u < 0 || D[i] < D[u])) u = i;
+      if (u < 0) break;
+      done[u] = 1;
+      for (const ei of NET.nodes[u].adj) {
+        const e = NET.edges[ei], v = e.a === u ? e.b : e.a, nd = D[u] + e.len * e.wf;
+        if (nd < D[v]) { D[v] = nd; prev[v] = u; via[v] = ei; src[v] = src[u]; }
+      }
+    }
+
+    // --- nejlepší místo, kde z cesty odbočit k hrobu ---
+    const GRASS = 1.25;
+    let best = null;
+    for (const c of end.cands) {
+      const e = NET.edges[c.e];
+      const opts = [{ node: e.a, t: D[e.a] + c.off * e.wf }, { node: e.b, t: D[e.b] + (e.len - c.off) * e.wf }];
+      starts.forEach((s, si) => { if (s.e === c.e) opts.push({ same: si, t: s.gd + Math.abs(s.off - c.off) * e.wf }); });
+      for (const o of opts) {
+        const tot = o.t + c.gd * GRASS;
+        if (!best || tot < best.tot) best = { tot, c, o };
+      }
+    }
+    if ((!best || !isFinite(best.tot)) && !end.wide) {
+      // hrob se napojil jen na izolovaný kousek sítě – hledat napojení dál
+      endCache[g.id] = Object.assign(attach(g.cx, g.cy, 2500, 400) || { cands: [] }, { wide: true });
+      return routeFrom(graveId, startKey, gate);
+    }
+    if (!best || !isFinite(best.tot)) return fallback;
+
+    // --- sestavení geometrie ---
+    const { c, o } = best;
+    const ce = NET.edges[c.e];
+    let net, start;
+    if (o.same != null) {
+      start = starts[o.same];
+      net = slice(ce, start.off, c.off);
+    } else {
+      const chainN = [];
+      for (let n = o.node; n !== -1; n = prev[n]) chainN.unshift(n);
+      start = starts[src[chainN[0]]];
+      const se = NET.edges[via[chainN[0]]];
+      net = slice(se, start.off, chainN[0] === se.a ? 0 : se.len);
+      for (let k = 1; k < chainN.length; k++) {
+        const e = NET.edges[via[chainN[k]]];
+        const seg = e.a === chainN[k - 1] ? e.pts : e.pts.slice().reverse();
+        net.push(...seg.slice(1));
+      }
+      net.push(...slice(ce, o.node === ce.a ? 0 : ce.len, c.off).slice(1));
+    }
+    // poslední úsek: z cesty uličkou k hrobu (vyhlazená cesta po mřížce)
+    const lastLeg = smooth(c.chain).map(toPt);
+    const lp = lastLeg[lastLeg.length - 1];
     let ex = g.cx, ey = g.cy, ed = Infinity;
     for (let i = 0; i < g.ring.length; i += 2) {
-      const d = Math.hypot(g.ring[i] - end.x, g.ring[i + 1] - end.y);
+      const d = Math.hypot(g.ring[i] - lp.x, g.ring[i + 1] - lp.y);
       if (d < ed) { ed = d; ex = g.ring[i]; ey = g.ring[i + 1]; }
     }
-    pts.push({ x: ex, y: ey });
+    if (!start.lead) start.lead = [{ x: gate.x, y: gate.y }, ...smooth(start.chain.slice().reverse()).map(toPt)];
+    const head = dedupe([...start.lead, ...net]);
+    const pts = dedupe([...head, ...lastLeg, { x: ex, y: ey }]);
     let total = 0;
     for (let i = 1; i < pts.length; i++) total += dist(pts[i - 1], pts[i]);
 
-    // ---- pokyny: úseky mezi zatáčkami nad 30° ----
-    const sp = simplify(pts.slice(0, -1), 15);
-    const legs = [];
-    let acc = 0, turn = null;
+    // --- pokyny podle sítě cest ---
+    // úseky mezi zlomy; krátké úseky (do 12 m) se slučují a rozhoduje celková změna směru
+    const sp = simplify(head, 20);
+    const hd = (p, q) => Math.atan2(q.y - p.y, q.x - p.x);
+    let legs = [];
     for (let i = 1; i < sp.length; i++) {
-      acc += dist(sp[i - 1], sp[i]);
-      if (i === sp.length - 1) break;
-      const p = sp[i - 1], a = sp[i], b = sp[i + 1];
-      const cross = (a.x - p.x) * (b.y - a.y) - (a.y - p.y) * (b.x - a.x);
-      const ang = Math.abs(Math.atan2(cross, (a.x - p.x) * (b.x - a.x) + (a.y - p.y) * (b.y - a.y)));
-      if (ang < 0.52) continue;
-      legs.push({ turn, u: acc });
-      // orientační bod: sekce kousek za zatáčkou
-      const L = dist(a, b) || 1, ahead = { x: a.x + (b.x - a.x) * Math.min(1, 80 / L), y: a.y + (b.y - a.y) * Math.min(1, 80 / L) };
-      turn = { dir: cross > 0 ? 'right' : 'left', sharp: ang > 0.85, back: ang > 2.4, sec: nearestSection(ahead.x, ahead.y) };
-      acc = 0;
+      const u = dist(sp[i - 1], sp[i]), h = hd(sp[i - 1], sp[i]);
+      const last = legs[legs.length - 1];
+      if (last) { let dh = h - last.h1; while (dh > Math.PI) dh -= 2 * Math.PI; while (dh < -Math.PI) dh += 2 * Math.PI; if (Math.abs(dh) < 0.7) { last.u += u; last.h1 = h; continue; } }
+      legs.push({ u, h0: h, h1: h, at: sp[i - 1] });
     }
-    legs.push({ turn, u: acc });
-    // krátké úseky (do 5 m) přičíst k následujícímu – obloučky a odsazení cest
-    for (let i = legs.length - 2; i >= 1; i--) if (legs[i].u < 50) { legs[i + 1].u += legs[i].u; if (!legs[i + 1].turn) legs[i + 1].turn = legs[i].turn; legs.splice(i, 1); }
-    // poslední krátký úsek (do 5 m) je jen „přistoupení k hrobu“ – přičíst k předchozímu
-    if (legs.length > 1 && legs[legs.length - 1].u < 50) legs[legs.length - 2].u += legs.pop().u;
+    for (let changed = true; changed;) {
+      changed = false;
+      for (let i = 1; i < legs.length; i++) {
+        if (legs[i].u >= 120 || legs.length < 2) continue;
+        // poslední úsek s ostrou zatáčkou (např. odbočka na boční cestičku) ponechat
+        if (i === legs.length - 1 && legs[i].u >= 40) {
+          let dh = legs[i].h0 - legs[i - 1].h1; while (dh > Math.PI) dh -= 2 * Math.PI; while (dh < -Math.PI) dh += 2 * Math.PI;
+          if (Math.abs(dh) > 1.0) continue;
+        }
+        if (i < legs.length - 1) { legs[i + 1].u += legs[i].u; legs[i + 1].h0 = legs[i + 1].h0; legs[i + 1].at = legs[i].at; legs[i + 1].fromH = legs[i - 1].h1; }
+        else legs[i - 1].u += legs[i].u;
+        legs.splice(i, 1); changed = true; break;
+      }
+    }
     const steps = [{ kind: 'start', text: startKey === 'gps' ? 'Vyjděte od místa, kde stojíte' : `Vstupte ${gate.short}` }];
-    for (const l of legs) {
+    legs.forEach((l, i) => {
       const m = roundM(meters(l.u));
-      if (!l.turn) { steps.push({ kind: 'straight', text: 'Pokračujte rovně', m }); continue; }
-      const side = l.turn.dir === 'right' ? 'vpravo' : 'vlevo';
-      const verb = l.turn.back ? 'Otočte se' : l.turn.sharp ? `Odbočte ${side}` : `Držte se ${side}`;
-      steps.push({ kind: l.turn.dir, text: l.turn.sec ? `${verb} k sekci ${l.turn.sec.id}` : verb, m });
+      let dh = i ? l.h0 - (l.fromH != null ? l.fromH : legs[i - 1].h1) : 0;
+      while (dh > Math.PI) dh -= 2 * Math.PI; while (dh < -Math.PI) dh += 2 * Math.PI;
+      const prevStep = steps[steps.length - 1];
+      if (Math.abs(dh) < 0.6) {
+        if (prevStep.kind === 'straight') prevStep.m = roundM(prevStep.m + m);
+        else steps.push({ kind: 'straight', text: 'Pokračujte rovně', m });
+        return;
+      }
+      const dir = dh > 0 ? 'right' : 'left', side = dir === 'right' ? 'vpravo' : 'vlevo';
+      const verb = Math.abs(dh) > 2.6 ? 'Otočte se' : Math.abs(dh) > 1.0 ? `Odbočte ${side}` : `Držte se ${side}`;
+      const L = l.u || 1, ahead = { x: l.at.x + Math.cos(l.h0) * Math.min(80, L), y: l.at.y + Math.sin(l.h0) * Math.min(80, L) };
+      const sec = nearestSection(ahead.x, ahead.y);
+      steps.push({ kind: dir, text: sec ? `${verb} k sekci ${sec.id}` : verb, m });
+    });
+    // odbočka z cesty do uličky mezi hroby
+    let legLen = 0;
+    for (let i = 1; i < lastLeg.length; i++) legLen += dist(lastLeg[i - 1], lastLeg[i]);
+    const hp = head[head.length - 1], hq = head[Math.max(0, head.length - 2)];
+    const into = legLen > 25;
+    if (into) {
+      const q = lastLeg[1] || lastLeg[0];
+      const cr = (hp.x - hq.x) * (q.y - hp.y) - (hp.y - hq.y) * (q.x - hp.x);
+      steps.push({ kind: cr > 0 ? 'right' : 'left', text: `Odbočte ${cr > 0 ? 'vpravo' : 'vlevo'} mezi hroby`, m: roundM(meters(legLen)) });
     }
-    const la = sp[Math.max(0, sp.length - 2)], lb = sp[sp.length - 1];
+    const la = into ? lastLeg[Math.max(0, lastLeg.length - 2)] : hq, lb = into ? lastLeg[lastLeg.length - 1] : hp;
     const cr = (lb.x - la.x) * (g.cy - lb.y) - (lb.y - la.y) * (g.cx - lb.x);
-    const side = ed < 12 ? 'přímo před vámi' : cr > 0 ? 'po vaší pravé straně' : 'po vaší levé straně';
-    steps.push({ kind: 'finish', text: `Hrob ${g.num} v sekci ${g.sec} je ${side}` });
+    const sideTxt = into && ed < 12 ? 'přímo před vámi' : cr > 0 ? 'po vaší pravé straně' : 'po vaší levé straně';
+    steps.push({ kind: 'finish', text: `Hrob ${g.num} v sekci ${g.sec} je ${sideTxt}` });
     const m = roundM(meters(total));
-    return { ok: !!raw, gate: startKey, u: total, pts, steps, m, min: Math.max(1, Math.round(m / 70)) };
+    return { ok: true, gate: startKey, u: best.tot, pts, steps, m, min: Math.max(1, Math.round(m / 70)), split: head.length };
   }
 
   // ---------- Pohřby (relativně k dnešku) ----------

@@ -63,6 +63,149 @@ def roman_key(s):
     return (tot, m.group(2))
 
 
+def _thin(img):
+    """Zhang–Suen ztenčení binárního rastru (numpy), vrací kostru o šířce 1 px."""
+    import numpy as np
+    img = img.astype(np.uint8).copy()
+    while True:
+        changed = False
+        for step in (0, 1):
+            P = np.pad(img, 1)
+            p2, p3, p4, p5 = P[:-2, 1:-1], P[:-2, 2:], P[1:-1, 2:], P[2:, 2:]
+            p6, p7, p8, p9 = P[2:, 1:-1], P[2:, :-2], P[1:-1, :-2], P[:-2, :-2]
+            B = p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9
+            seq = [p2, p3, p4, p5, p6, p7, p8, p9, p2]
+            A = sum(((seq[i] == 0) & (seq[i + 1] == 1)).astype(np.uint8) for i in range(8))
+            if step == 0:
+                c1, c2 = p2 * p4 * p6, p4 * p6 * p8
+            else:
+                c1, c2 = p2 * p4 * p8, p2 * p6 * p8
+            m = (img == 1) & (B >= 2) & (B <= 6) & (A == 1) & (c1 == 0) & (c2 == 0)
+            if m.any():
+                img[m] = 0
+                changed = True
+        if not changed:
+            return img
+
+
+def build_network(paved, blockers, gates, T, res=0.25):
+    """Osy zpevněných cest jako graf: uzly [x,y] a hrany [a, b, šířka dm, polyline]."""
+    import numpy as np
+    from PIL import Image, ImageDraw
+    from scipy import ndimage
+
+    minx, miny, maxx, maxy = paved.bounds
+    W, H = int((maxx - minx) / res) + 3, int((maxy - miny) / res) + 3
+    px = lambda x, y: ((x - minx) / res + 1, (maxy - y) / res + 1)
+    world = lambda r, c: (minx + (c - 1 + 0.5) * res, maxy - (r - 1 + 0.5) * res)
+
+    im = Image.new("L", (W, H), 0)
+    dr = ImageDraw.Draw(im)
+    for p in (paved.geoms if hasattr(paved, "geoms") else [paved]):
+        dr.polygon([px(x, y) for x, y in p.exterior.coords], fill=1)
+        for i in p.interiors:
+            dr.polygon([px(x, y) for x, y in i.coords], fill=0)
+    bim = Image.new("L", (W, H), 0)
+    bdr = ImageDraw.Draw(bim)
+    for b in blockers:
+        for p in (b.geoms if hasattr(b, "geoms") else [b]):
+            if p.bounds[2] < minx or p.bounds[0] > maxx:
+                continue
+            bdr.polygon([px(x, y) for x, y in p.exterior.coords], fill=1)
+    blocked = np.array(bim, dtype=bool)
+    mask = np.array(im, dtype=bool) & ~blocked
+    # vyhladit okraje a zalepit drobné mezery – ale nikdy ne přes hrob, budovu či zeď
+    mask = ndimage.binary_closing(mask, iterations=2) & ~blocked
+    mask = ndimage.binary_opening(mask, iterations=2)
+    lab, n = ndimage.label(mask)
+    sizes = ndimage.sum(mask, lab, range(1, n + 1))
+    keep = np.isin(lab, [i + 1 for i, s in enumerate(sizes) if s * res * res >= 15])
+    mask &= keep
+    width = ndimage.distance_transform_edt(mask) * res * 2  # šířka cesty v m
+    sk = _thin(mask).astype(bool)
+
+    # --- kostra -> graf ---
+    nb = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+    pts = set(zip(*np.nonzero(sk)))
+    deg = {p: sum((p[0] + dy, p[1] + dx) in pts for dy, dx in nb) for p in pts}
+    nodepix = {p for p, d in deg.items() if d != 2}
+    # sloučit sousední uzlové pixely do jednoho uzlu
+    nid, nodes = {}, []
+    for p in nodepix:
+        if p in nid:
+            continue
+        stack, comp = [p], []
+        nid[p] = len(nodes)
+        while stack:
+            q = stack.pop(); comp.append(q)
+            for dy, dx in nb:
+                r = (q[0] + dy, q[1] + dx)
+                if r in nodepix and r not in nid:
+                    nid[r] = len(nodes); stack.append(r)
+        cy = sum(q[0] for q in comp) / len(comp); cx = sum(q[1] for q in comp) / len(comp)
+        nodes.append(world(cy, cx))
+    edges, seen = [], set()
+    for start in nodepix:
+        for dy, dx in nb:
+            q = (start[0] + dy, start[1] + dx)
+            if q not in pts or q in nodepix or (start, q) in seen:
+                continue
+            chain, prev, cur = [start], start, q
+            while cur not in nodepix:
+                chain.append(cur)
+                nxt = [(cur[0] + a, cur[1] + b) for a, b in nb if (cur[0] + a, cur[1] + b) in pts and (cur[0] + a, cur[1] + b) != prev and (cur[0] + a, cur[1] + b) not in chain[-3:]]
+                if not nxt:
+                    break
+                # přednost ortogonálním sousedům (nezkracovat přes roh)
+                nxt.sort(key=lambda r: abs(r[0] - cur[0]) + abs(r[1] - cur[1]))
+                prev, cur = cur, nxt[0]
+            if cur not in nodepix:
+                continue
+            chain.append(cur)
+            seen.add((start, chain[1])); seen.add((cur, chain[-2]))
+            a, b = nid[start], nid[cur]
+            if a == b and len(chain) < 12:
+                continue
+            wv = [width[p] for p in chain[1:-1]] or [width[start]]
+            line = LineString([nodes[a]] + [world(*p) for p in chain[1:-1]] + [nodes[b]])
+            edges.append([a, b, float(np.median(wv)), line])
+
+    # --- prořezání krátkých výběžků (kromě míst u vchodů) ---
+    near_gate = lambda i: any(Point(nodes[i]).distance(g) < 7 for g in gates)
+    for _ in range(4):
+        d = collections.Counter()
+        for a, b, *_ in edges:
+            d[a] += 1; d[b] += 1
+        edges = [e for e in edges if not ((d[e[0]] == 1 or d[e[1]] == 1) and e[3].length < 5 and not (near_gate(e[0]) or near_gate(e[1])))]
+    # sloučit uzly stupně 2
+    while True:
+        d = collections.defaultdict(list)
+        for i, e in enumerate(edges):
+            d[e[0]].append(i); d[e[1]].append(i)
+        mid = next((n for n, l in d.items() if len(l) == 2 and l[0] != l[1]), None)
+        if mid is None:
+            break
+        i, j = d[mid]
+        e1, e2 = edges[i], edges[j]
+        c1 = list(e1[3].coords) if e1[1] == mid else list(e1[3].coords)[::-1]
+        c2 = list(e2[3].coords) if e2[0] == mid else list(e2[3].coords)[::-1]
+        a = e1[0] if e1[1] == mid else e1[1]
+        b = e2[1] if e2[0] == mid else e2[0]
+        w = (e1[2] * e1[3].length + e2[2] * e2[3].length) / max(e1[3].length + e2[3].length, 1e-6)
+        new = [a, b, w, LineString(c1 + c2[1:])]
+        edges = [e for k, e in enumerate(edges) if k not in (i, j)] + [new]
+    used = sorted({e[0] for e in edges} | {e[1] for e in edges})
+    remap = {o: k for k, o in enumerate(used)}
+    out_nodes = [list(T(*nodes[o])) for o in used]
+    out_edges = []
+    for a, b, w, line in edges:
+        s = line.simplify(0.2)
+        flat = [c for x, y in s.coords for c in T(x, y)]
+        out_edges.append([remap[a], remap[b], round(w * 10), flat])
+    print(f"sit cest: {len(out_nodes)} uzlu, {len(out_edges)} hran, {sum(e[3].length for e in edges):.0f} m")
+    return {"nodes": out_nodes, "edges": out_edges}
+
+
 def build(raw, out):
     hr = shape(load(raw, "n_polohopis_hranice_pohrebiste")[0]["geometry"])
     minx, miny, maxx, maxy = hr.bounds
@@ -175,6 +318,13 @@ def build(raw, out):
     gates.sort(key=lambda g: -g[0])
     gates_out = [[*T(g[2], g[3]), g[0]] for g in gates]
 
+    # --- síť os cest (pro navigaci po středu cest) ---
+    blockers = [shape(f["geometry"]) for f in load(raw, "v_platnost_hrob_platne")]
+    for f in load(raw, "n_polohopis_pob"):
+        if AREA.get(int(f["properties"]["kod"])) in ("building", "monument", "wall"):
+            blockers.append(shape(f["geometry"]))
+    net = build_network(paved, blockers, [Point(g[2], g[3]) for g in gates], T)
+
     data = {
         "name": hr and load(raw, "n_polohopis_hranice_pohrebiste")[0]["properties"].get("nazev"),
         "source": "ASGIS Ostrava · Pasport hřbitova · geodetické zaměření DIGIS, spol. s r.o. (10. 12. 2025)",
@@ -182,7 +332,7 @@ def build(raw, out):
         "w": round(W * 10), "h": round(H * 10),
         "boundary": polys(hr, 0.05),
         "areas": areas, "lines": lns, "points": pts,
-        "sections": sections, "graves": graves, "gates": gates_out,
+        "sections": sections, "graves": graves, "gates": gates_out, "net": net,
     }
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, "w", encoding="utf-8") as fh:
