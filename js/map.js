@@ -70,8 +70,10 @@
   const TILE_BUDGET_MB = 56;           // horní mez paměti dlaždic
 
   // prostorový index: mřížka buněk → položky s obálkou
+  // razítko proti duplicitám je společné všem indexům: tatáž položka (hrob, strom, budova) bývá ve více vrstvách
+  let STAMP = 0;
   class Index {
-    constructor() { this.cells = new Map(); this.stamp = 0; }
+    constructor() { this.cells = new Map(); }
     add(it) {
       for (let cy = Math.floor(it.y0 / CELL); cy <= Math.floor(it.y1 / CELL); cy++)
         for (let cx = Math.floor(it.x0 / CELL); cx <= Math.floor(it.x1 / CELL); cx++) {
@@ -79,7 +81,7 @@
         }
     }
     query(x0, y0, x1, y1) {
-      const s = ++this.stamp, out = [];
+      const s = ++STAMP, out = [];
       for (let cy = Math.floor(y0 / CELL); cy <= Math.floor(y1 / CELL); cy++)
         for (let cx = Math.floor(x0 / CELL); cx <= Math.floor(x1 / CELL); cx++) {
           const c = this.cells.get(cx * 1000 + cy); if (!c) continue;
@@ -92,6 +94,7 @@
   class CemeteryMap {
     constructor(container, data, opts) {
       this.c = container; this.d = data; this.o = opts || {};
+      container.cemeteryMap = this; // pro ladění v konzoli
       // živý pohled (co uživatel vidí) a pohled, ve kterém jsou SVG vrstvy naposledy skutečně vykreslené
       this.k = 1; this.x = 0; this.y = 0; this.r = 0; this.fitK = 1;
       this.cv = { x: 0, y: 0, k: 1, r: 0 };
