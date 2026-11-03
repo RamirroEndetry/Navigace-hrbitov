@@ -93,13 +93,53 @@
     return { left: Math.min(r.right + 4, cw * 0.6), top: state.view === 'grave' ? 150 : 76, right: 70, bottom: 56 };
   }
 
+  // ---------- Vzhled: denní/noční režim, barevný styl mapy, úsporné vykreslení ----------
+  const html = document.documentElement;
+  const darkMq = window.matchMedia('(prefers-color-scheme: dark)');
+  function applyTheme() {
+    const saved = store.get('theme', null);
+    const dark = saved ? saved === 'dark' : darkMq.matches;
+    html.dataset.theme = dark ? 'dark' : 'light';
+    $('meta[name="theme-color"]').setAttribute('content', dark ? '#151B18' : '#F3EFE6');
+    const b = $('#themeBtn');
+    b.setAttribute('aria-pressed', String(dark));
+    b.setAttribute('aria-label', dark ? 'Přepnout na denní režim' : 'Přepnout na noční režim');
+    $('#themeSw').checked = dark;
+  }
+  function setTheme(dark) { store.set('theme', dark ? 'dark' : 'light'); applyTheme(); }
+  // bez vlastní volby sledovat nastavení systému
+  const onMq = () => { if (store.get('theme', null) == null) applyTheme(); };
+  if (darkMq.addEventListener) darkMq.addEventListener('change', onMq); else if (darkMq.addListener) darkMq.addListener(onMq);
+  const MAP_STYLES = ['natural', 'clean', 'sepia'];
+  function applyStyle() {
+    const s = MAP_STYLES.includes(store.get('mapstyle', 'natural')) ? store.get('mapstyle', 'natural') : 'natural';
+    html.dataset.mapstyle = s;
+    document.querySelectorAll('[data-act="mapstyle"]').forEach((b) => { b.classList.toggle('on', b.dataset.style === s); b.setAttribute('aria-pressed', String(b.dataset.style === s)); });
+  }
+  function setLite(on, remember) {
+    html.classList.toggle('lite', on);
+    $('#liteSw').checked = on;
+    if (remember) store.set('lite', on);
+  }
+  applyTheme(); applyStyle();
+  setLite(html.classList.contains('lite'), false);
+
+  const compass = $('#compass');
+  function updateCompass(r) {
+    compass.querySelector('svg').style.transform = r ? `rotate(${r.toFixed(1)}deg)` : '';
+    compass.classList.toggle('rot', !!r);
+    compass.title = r ? 'Otočit na sever' : 'Sever je nahoře';
+  }
+
   // ---------- Mapa ----------
   const map = new window.CemeteryMap($('#map'), D, {
     insets,
     onGrave: (g) => { if (!GUIDE) openGrave(g.id, { from: state.view === 'grave' ? state.from : state.view }); },
     onHover: showTip,
-    onView: updateScale,
-    onPoi: openPoi
+    onView: (k, r) => { updateScale(k); updateCompass(r); },
+    onPoi: openPoi,
+    // překreslení mapy je opakovaně pomalé → zapnout úsporné vykreslení (pokud si uživatel nevybral sám)
+    onSlow: () => { if (store.get('lite', null) == null && !html.classList.contains('lite')) { setLite(true, false); toast('Zapnuto úsporné vykreslení mapy pro plynulejší pohyb'); } }
   });
   map.setCandles(state.candles);
   if (KIOSK) map.youAreHere({ x: D.GATES.main.x + 60, y: D.GATES.main.y - 40 });
@@ -664,11 +704,18 @@
       case 'zoom-in': map.animateZoom(1.7); break;
       case 'zoom-out': map.animateZoom(1 / 1.7); break;
       case 'fit': map.fit(); break;
+      case 'rot-l': map.animateRotate(-30); break;
+      case 'rot-r': map.animateRotate(30); break;
+      case 'north': map.resetNorth(); break;
+      case 'theme': setTheme(html.dataset.theme !== 'dark'); break;
+      case 'mapstyle': store.set('mapstyle', a.dataset.style); applyStyle(); break;
       case 'locate': locate(a); break;
       case 'layers': { const p = $('#layersPop'); p.hidden = !p.hidden; a.classList.toggle('on', !p.hidden); break; }
     }
   });
-  document.querySelectorAll('#layersPop input').forEach((inp) => inp.addEventListener('change', () => map.setLayer(inp.dataset.layer, inp.checked)));
+  document.querySelectorAll('#layersPop input[data-layer]').forEach((inp) => inp.addEventListener('change', () => map.setLayer(inp.dataset.layer, inp.checked)));
+  $('#themeSw').addEventListener('change', (e) => setTheme(e.target.checked));
+  $('#liteSw').addEventListener('change', (e) => setLite(e.target.checked, true));
 
   // ---------- GPS poloha (WGS84 -> S-JTSK -> mapa) ----------
   let watchId = null;

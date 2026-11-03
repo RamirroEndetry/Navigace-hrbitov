@@ -1,5 +1,9 @@
-/* Tichá cesta — vykreslení skutečného půdorysu hřbitova (SVG), posun, zoom, pinch, trasa a značky.
-   Světové jednotky = decimetry (viz data/vitkovice.js). */
+/* Tichá cesta — vykreslení skutečného půdorysu hřbitova (SVG), posun, zoom, pinch, otáčení, trasa a značky.
+   Světové jednotky = decimetry (viz data/vitkovice.js).
+
+   Výkon: během posunu, zoomu i otáčení se jen transformuje už vykreslený obraz (CSS transform na <svg>,
+   skládá ho GPU bez překreslování tisíců cest). Skutečné překreslení SVG („commit“) proběhne až po
+   zastavení gesta, nebo když by se jinak objevil nevykreslený okraj či příliš rozmazaný obraz. */
 (function () {
   'use strict';
   const NS = 'http://www.w3.org/2000/svg';
@@ -11,6 +15,8 @@
   };
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+  const RAD = Math.PI / 180;
+  const norm360 = (a) => ((a % 360) + 360) % 360;
   const ringD = (r) => { let s = 'M' + r[0] + ' ' + r[1]; for (let i = 2; i < r.length; i += 2) s += 'L' + r[i] + ' ' + r[i + 1]; return s + 'Z'; };
   const polyD = (polys) => polys.map((p) => p.map(ringD).join('')).join('');
   const lineD = (l) => { let s = 'M' + l[0] + ' ' + l[1]; for (let i = 2; i < l.length; i += 2) s += 'L' + l[i] + ' ' + l[i + 1]; return s; };
@@ -48,17 +54,34 @@
   class CemeteryMap {
     constructor(container, data, opts) {
       this.c = container; this.d = data; this.o = opts || {};
-      this.k = 1; this.x = 0; this.y = 0; this.fitK = 1;
+      // živý pohled (co uživatel vidí) a pohled, ve kterém je SVG naposledy skutečně vykreslené
+      this.k = 1; this.x = 0; this.y = 0; this.r = 0; this.fitK = 1;
+      this.cv = { x: 0, y: 0, k: 1, r: 0 };
+      this.m = 0;
       this.scaled = [];
       this.svg = el('svg', { class: 'map-svg', role: 'application', 'aria-label': 'Interaktivní mapa hřbitova' }, container);
+      this.layout();
       this.build();
       this.bind();
       this.fit(false);
-      let lastW = container.clientWidth;
+      let lastW = container.clientWidth, lastH = container.clientHeight;
       new ResizeObserver(() => {
-        if (Math.abs(container.clientWidth - lastW) > 40 && !this._touched) this.fit(false);
-        lastW = container.clientWidth;
+        const cw = container.clientWidth, ch = container.clientHeight;
+        if (cw === lastW && ch === lastH) return;
+        this.layout();
+        if (Math.abs(cw - lastW) > 40 && !this._touched) this.fit(false); else this.apply(true);
+        lastW = cw; lastH = ch;
       }).observe(container);
+    }
+
+    // SVG je o okraj větší než výřez, aby při posunu či otočení nebyl hned vidět nevykreslený kraj
+    layout() {
+      const cw = this.c.clientWidth, ch = this.c.clientHeight;
+      this.m = Math.round(Math.min(cw, ch) * 0.2);
+      const s = this.svg.style;
+      s.left = s.top = -this.m + 'px';
+      s.width = cw + 2 * this.m + 'px'; s.height = ch + 2 * this.m + 'px';
+      s.transformOrigin = `${this.m}px ${this.m}px`;
     }
 
     // ---------- Stavba scény ----------
@@ -184,24 +207,53 @@
       this.markG.querySelectorAll(sel).forEach((n) => { this.scaled = this.scaled.filter((s) => s !== n); n.remove(); });
     }
 
-    world(e) {
-      const r = this.c.getBoundingClientRect();
-      return { x: (e.clientX - r.left - this.x) / this.k, y: (e.clientY - r.top - this.y) / this.k };
+    // ---------- Geometrie pohledu ----------
+    // obrazovka = T + R(r) · k · svět
+    worldPt(px, py) {
+      const a = -this.r * RAD, cos = Math.cos(a), sin = Math.sin(a);
+      const dx = px - this.x, dy = py - this.y;
+      return { x: (dx * cos - dy * sin) / this.k, y: (dx * sin + dy * cos) / this.k };
+    }
+    world(e) { const r = this.c.getBoundingClientRect(); return this.worldPt(e.clientX - r.left, e.clientY - r.top); }
+    insets() { return (this.o.insets && this.o.insets()) || { left: 0, top: 0, right: 0, bottom: 0 }; }
+    // střed části výřezu, kterou nezakrývají panely
+    viewCenter() {
+      const i = this.insets();
+      return { x: i.left + (this.c.clientWidth - i.left - i.right) / 2, y: i.top + (this.c.clientHeight - i.top - i.bottom) / 2 };
+    }
+    // posun, při kterém světový bod (cx,cy) leží na obrazovce v (vx,vy)
+    originFor(k, r, cx, cy, vx, vy) {
+      const a = r * RAD, cos = Math.cos(a), sin = Math.sin(a);
+      return { x: vx - k * (cx * cos - cy * sin), y: vy - k * (cx * sin + cy * cos) };
     }
 
     // ---------- Interakce ----------
     bind() {
       const svg = this.svg;
       const pts = new Map();
-      let pinch = null, moved = 0;
+      let pinch = null, moved = 0, rot = null;
+      const ang = (a, b) => Math.atan2(b.y - a.y, b.x - a.x) / RAD;
+      const suppress = () => { this._suppress = true; setTimeout(() => (this._suppress = false), 30); };
+      svg.addEventListener('contextmenu', (e) => e.preventDefault());
       svg.addEventListener('pointerdown', (e) => {
-        if (e.button !== 0 && e.pointerType === 'mouse') return;
+        if (e.pointerType === 'mouse' && e.button !== 0 && e.button !== 2) return;
+        this._touched = true; this.stopAnim(); moved = 0;
+        // myš: pravé tlačítko nebo Ctrl/Shift + tažení otáčí mapu kolem středu výřezu
+        if (e.pointerType === 'mouse' && (e.button === 2 || e.ctrlKey || e.shiftKey)) {
+          rot = { id: e.pointerId, x: e.clientX }; svg.classList.add('rotating'); return;
+        }
         pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-        moved = 0; this._touched = true; this.stopAnim();
-        if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), k: this.k }; }
+        if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), k: this.k, a: ang(a, b), acc: 0, on: false }; }
         svg.classList.add('dragging');
       });
       window.addEventListener('pointermove', (e) => {
+        if (rot && e.pointerId === rot.id) {
+          const c = this.viewCenter();
+          this.rotateAt((e.clientX - rot.x) * 0.4, c.x, c.y);
+          rot.x = e.clientX; moved += 10;
+          this.queue();
+          return;
+        }
         const p = pts.get(e.pointerId);
         if (!p) {
           if (e.pointerType === 'mouse' && e.target.closest && e.target.closest('.map-svg')) this.hover(e);
@@ -211,7 +263,7 @@
         if (pts.size === 1) {
           this.x += dx; this.y += dy; moved += Math.abs(dx) + Math.abs(dy);
           p.x = e.clientX; p.y = e.clientY;
-          this.apply();
+          this.queue();
         } else if (pts.size === 2 && pinch) {
           const old = [...pts.values()];
           const oc = { x: (old[0].x + old[1].x) / 2, y: (old[0].y + old[1].y) / 2 };
@@ -219,17 +271,26 @@
           const [a, b] = [...pts.values()];
           const nc = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
           const r = this.c.getBoundingClientRect();
+          const px = nc.x - r.left, py = nc.y - r.top;
           this.x += nc.x - oc.x; this.y += nc.y - oc.y;
-          this.zoomAt(pinch.k * Math.hypot(a.x - b.x, a.y - b.y) / pinch.d / this.k, nc.x - r.left, nc.y - r.top);
+          this.zoomAt(pinch.k * Math.hypot(a.x - b.x, a.y - b.y) / pinch.d / this.k, px, py);
+          // otočení dvěma prsty začne až po malém prahu, aby se mapa při běžném zoomu nekroutila
+          const na = ang(a, b);
+          let da = na - pinch.a; if (da > 180) da -= 360; if (da < -180) da += 360;
+          pinch.a = na;
+          if (pinch.on) this.rotateAt(da, px, py);
+          else { pinch.acc += da; if (Math.abs(pinch.acc) > 10) pinch.on = true; }
           moved += 10;
+          this.queue();
         }
       });
       const up = (e) => {
+        if (rot && e.pointerId === rot.id) { rot = null; svg.classList.remove('rotating'); if (moved > 6) suppress(); return; }
         if (!pts.has(e.pointerId)) return;
         pts.delete(e.pointerId);
         if (pts.size < 2) pinch = null;
         if (!pts.size) svg.classList.remove('dragging');
-        if (moved > 6) { this._suppress = true; setTimeout(() => (this._suppress = false), 30); }
+        if (moved > 6) suppress();
       };
       window.addEventListener('pointerup', up);
       window.addEventListener('pointercancel', up);
@@ -239,6 +300,7 @@
         this._touched = true; this.stopAnim();
         const r = this.c.getBoundingClientRect();
         this.zoomAt(Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0018)), e.clientX - r.left, e.clientY - r.top);
+        this.queue();
       }, { passive: false });
       svg.addEventListener('dblclick', (e) => { const r = this.c.getBoundingClientRect(); this.animateZoom(2, e.clientX - r.left, e.clientY - r.top); });
       svg.addEventListener('click', (e) => {
@@ -276,107 +338,194 @@
       this.o.onSection && this.o.onSection(s);
     }
 
+    // zoom kolem bodu obrazovky (nezávislý na otočení)
     zoomAt(f, px, py) {
       const k = clamp(this.k * f, this.fitK * 0.6, this.fitK * 40);
       this.x = px - (px - this.x) * (k / this.k);
       this.y = py - (py - this.y) * (k / this.k);
       this.k = k;
-      this.apply();
+    }
+
+    // otočení o dr stupňů kolem bodu obrazovky
+    rotateAt(dr, px, py) {
+      const a = dr * RAD, cos = Math.cos(a), sin = Math.sin(a);
+      const dx = this.x - px, dy = this.y - py;
+      this.x = px + dx * cos - dy * sin;
+      this.y = py + dx * sin + dy * cos;
+      this.r = norm360(this.r + dr);
     }
 
     animateZoom(f, px, py) {
-      if (px == null) { const i = this.insets(); px = i.left + (this.c.clientWidth - i.left - i.right) / 2; py = i.top + (this.c.clientHeight - i.top - i.bottom) / 2; }
+      if (px == null) { const c = this.viewCenter(); px = c.x; py = c.y; }
       const k = clamp(this.k * f, this.fitK * 0.6, this.fitK * 40);
       this.animTo(k, px - (px - this.x) * (k / this.k), py - (py - this.y) * (k / this.k), 340);
     }
 
-    apply() {
-      this.root.setAttribute('transform', `translate(${this.x.toFixed(2)},${this.y.toFixed(2)}) scale(${this.k.toFixed(5)})`);
-      // značky (POI, popisky, špendlík) mají stálou velikost – přepočet jen při změně zoomu nebo nových značkách
-      const zoomed = this.k !== this._lastK;
-      if (zoomed || this._mDirty) {
-        this._lastK = this.k; this._mDirty = false;
-        const s = (1 / this.k).toFixed(5);
-        for (const g of this.scaled) g.setAttribute('transform', `translate(${g.dataset.x},${g.dataset.y}) scale(${s})${g.dataset.r ? ` rotate(${g.dataset.r})` : ''}`);
+    animateRotate(dr) {
+      const c = this.viewCenter(), a = dr * RAD, cos = Math.cos(a), sin = Math.sin(a);
+      const dx = this.x - c.x, dy = this.y - c.y;
+      this.animTo(this.k, c.x + dx * cos - dy * sin, c.y + dx * sin + dy * cos, 420, this.r + dr);
+    }
+    resetNorth() { let d = -this.r; if (d < -180) d += 360; this.animateRotate(d); }
+
+    // ---------- Vykreslení pohledu ----------
+    // události ukazatele se slučují do jednoho snímku
+    queue() {
+      if (this._q) return;
+      this._q = requestAnimationFrame(() => { this._q = null; this.apply(); });
+    }
+
+    apply(force) {
+      if (this._q) { cancelAnimationFrame(this._q); this._q = null; }
+      if (force || this._mDirty || this.needCommit()) this.commit(); else this.cssView();
+      // během pohybu: bez rozmazání pozadí panelů a bez čísel hrobů; po zastavení se vše doplní
+      const html = document.documentElement;
+      if (!html.classList.contains('map-moving')) html.classList.add('map-moving');
+      clearTimeout(this._idleT);
+      this._idleT = setTimeout(() => this.settle(), 140);
+      if (this.o.onView && (this.k !== this._vk || this.r !== this._vr)) { this._vk = this.k; this._vr = this.r; this.o.onView(this.k, this.r); }
+    }
+
+    settle() {
+      // překreslení a nová čísla hrobů ve stejném snímku → jediné vykreslení
+      if (this.svg.style.transform) this.commit();
+      this.scheduleNums(true);
+      document.documentElement.classList.remove('map-moving');
+      if (this.route) this.placeChevrons();
+    }
+
+    // levná cesta: už vykreslený obraz jen posunout/zvětšit/otočit (GPU)
+    cssView() {
+      const c = this.cv, s = this.k / c.k, a = (this.r - c.r) * RAD;
+      const cos = Math.cos(a) * s, sin = Math.sin(a) * s;
+      const ex = this.x - (cos * c.x - sin * c.y), ey = this.y - (sin * c.x + cos * c.y);
+      this.svg.style.transform = `matrix(${cos.toFixed(5)},${sin.toFixed(5)},${(-sin).toFixed(5)},${cos.toFixed(5)},${ex.toFixed(2)},${ey.toFixed(2)})`;
+    }
+
+    // je potřeba skutečně překreslit? (příliš velká změna měřítka, nebo by byl vidět nevykreslený kraj)
+    needCommit() {
+      const c = this.cv, s = this.k / c.k;
+      if (s > 1.5 || s < 0.67) return true;
+      const a = (this.r - c.r) * RAD;
+      const ca = Math.cos(a) * s, sa = Math.sin(a) * s;
+      const bx = this.x - (ca * c.x - sa * c.y), by = this.y - (sa * c.x + ca * c.y);
+      const ic = Math.cos(a) / s, is = Math.sin(a) / s;
+      const W = this.c.clientWidth, H = this.c.clientHeight, tol = this.m + Math.min(W, H) * 0.08;
+      for (const [px, py] of [[0, 0], [W, 0], [0, H], [W, H]]) {
+        const dx = px - bx, dy = py - by;
+        const qx = ic * dx + is * dy, qy = -is * dx + ic * dy;
+        if (qx < -tol || qx > W + tol || qy < -tol || qy > H + tol) return true;
+      }
+      return false;
+    }
+
+    // skutečné překreslení SVG v aktuálním pohledu
+    commit() {
+      const m = this.m;
+      this.root.setAttribute('transform', `translate(${(this.x + m).toFixed(2)},${(this.y + m).toFixed(2)}) rotate(${this.r.toFixed(3)}) scale(${this.k.toFixed(5)})`);
+      this.svg.style.transform = '';
+      this.cv = { x: this.x, y: this.y, k: this.k, r: this.r };
+      // značky (POI, popisky, špendlík) mají stálou velikost a zůstávají vzpřímené
+      if (this.k !== this._lastK || this.r !== this._lastR || this._mDirty) {
+        this._lastK = this.k; this._lastR = this.r; this._mDirty = false;
+        const s = (1 / this.k).toFixed(5), rr = (-this.r).toFixed(2);
+        for (const g of this.scaled) g.setAttribute('transform', `translate(${g.dataset.x},${g.dataset.y}) rotate(${rr}) scale(${s})`);
         const rel = this.k / this.fitK;
         this.svg.classList.toggle('lod-mid', rel > 2.2);
         this.svg.classList.toggle('lod-near', rel > 5);
         this.svg.classList.toggle('lod-far', rel < 1.6);
       }
-      // během pohybu: bez rozmazání pozadí panelů a bez čísel hrobů; po zastavení se vše doplní
-      const html = document.documentElement;
-      if (!html.classList.contains('map-moving')) html.classList.add('map-moving');
-      clearTimeout(this._idleT);
-      this._idleT = setTimeout(() => {
-        html.classList.remove('map-moving');
-        this.scheduleNums();
-        if (this.route) this.placeChevrons();
-      }, 140);
-      if (this.o.onView && zoomed) this.o.onView(this.k);
+      this.measure();
+    }
+
+    // hlídání výkonu: když překreslení opakovaně trvá dlouho, aplikace zapne úsporné vykreslení
+    measure() {
+      if (!this.o.onSlow || this._slowDone || !this._touched || document.hidden) return;
+      const t0 = performance.now();
+      requestAnimationFrame(() => {
+        const dt = performance.now() - t0;
+        if (document.hidden) return;
+        this._slow = this._slow || [];
+        this._slow.push(dt); if (this._slow.length > 4) this._slow.shift();
+        if (this._slow.length === 4 && this._slow.every((d) => d > 70)) { this._slowDone = true; this.o.onSlow(); }
+      });
     }
 
     // čísla hrobů jen ve viditelném výřezu při velkém přiblížení
-    scheduleNums() {
-      if (this._numRaf) return;
-      this._numRaf = requestAnimationFrame(() => {
+    scheduleNums(now) {
+      if (this._numRaf) { if (!now) return; cancelAnimationFrame(this._numRaf); }
+      const run = () => {
         this._numRaf = null;
         if (this.k < 2.2) { if (this.numG.childNodes.length) this.numG.textContent = ''; this._numKey = ''; return; }
-        const cw = this.c.clientWidth, ch = this.c.clientHeight;
-        const x0 = -this.x / this.k, y0 = -this.y / this.k, x1 = x0 + cw / this.k, y1 = y0 + ch / this.k;
-        const key = [x0, y0, x1, y1].map((v) => Math.round(v / 20)).join(',');
+        const W = this.c.clientWidth, H = this.c.clientHeight;
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        for (const [px, py] of [[0, 0], [W, 0], [0, H], [W, H]]) {
+          const w = this.worldPt(px, py);
+          x0 = Math.min(x0, w.x); y0 = Math.min(y0, w.y); x1 = Math.max(x1, w.x); y1 = Math.max(y1, w.y);
+        }
+        const key = [x0, y0, x1, y1].map((v) => Math.round(v / 20)).join(',') + '|' + Math.round(this.r);
         if (key === this._numKey) return;
         this._numKey = key;
         const list = this.d.gravesIn(x0, y0, x1, y1, 900);
+        const rot = this.r ? (-this.r).toFixed(1) : null;
         let html = '';
         for (const g of list) {
           const w = g.x1 - g.x0, h = g.y1 - g.y0;
           const fs = Math.max(2.2, Math.min(4.2, Math.min(w, h) * 0.42));
-          html += `<text x="${g.cx.toFixed(1)}" y="${(g.cy + fs * 0.36).toFixed(1)}" font-size="${fs.toFixed(1)}">${g.num}</text>`;
+          const cx = g.cx.toFixed(1), cy = g.cy.toFixed(1);
+          html += `<text x="${cx}" y="${(g.cy + fs * 0.36).toFixed(1)}" font-size="${fs.toFixed(1)}"${rot ? ` transform="rotate(${rot} ${cx} ${cy})"` : ''}>${g.num}</text>`;
         }
         this.numG.innerHTML = html;
-      });
+      };
+      if (now) run(); else this._numRaf = requestAnimationFrame(run);
     }
 
-    insets() { return (this.o.insets && this.o.insets()) || { left: 0, top: 0, right: 0, bottom: 0 }; }
-
-    frame(box, pad) {
+    frame(box, pad, r) {
       const cw = this.c.clientWidth, ch = this.c.clientHeight, i = this.insets();
       pad = pad == null ? 24 : pad;
+      if (r == null) r = this.r;
       const aw = Math.max(80, cw - i.left - i.right - pad * 2), ah = Math.max(80, ch - i.top - i.bottom - pad * 2);
-      const k = Math.min(aw / box.w, ah / box.h);
-      return { k, x: i.left + pad + (aw - box.w * k) / 2 - box.x * k, y: i.top + pad + (ah - box.h * k) / 2 - box.y * k };
+      // rozměry otočeného obdélníku
+      const a = r * RAD, c = Math.abs(Math.cos(a)), s = Math.abs(Math.sin(a));
+      const bw = box.w * c + box.h * s, bh = box.w * s + box.h * c;
+      const k = Math.min(aw / bw, ah / bh);
+      const o = this.originFor(k, r, box.x + box.w / 2, box.y + box.h / 2, i.left + pad + aw / 2, i.top + pad + ah / 2);
+      return { k, x: o.x, y: o.y };
     }
 
     fit(animate = true) {
-      const f = this.frame({ x: 120, y: 120, w: this.d.W - 240, h: this.d.H - 240 }, 8);
-      this.fitK = f.k;
-      if (animate) this.animTo(f.k, f.x, f.y); else { this.k = f.k; this.x = f.x; this.y = f.y; this.apply(); }
+      const box = { x: 120, y: 120, w: this.d.W - 240, h: this.d.H - 240 };
+      this.fitK = this.frame(box, 8, 0).k;
+      const f = this.frame(box, 8);
+      if (animate) this.animTo(f.k, f.x, f.y); else { this.k = f.k; this.x = f.x; this.y = f.y; this.apply(true); }
     }
 
     flyTo(box, maxRel) {
       const f = this.frame(box, 40);
       const k = Math.min(f.k, this.fitK * (maxRel || 12));
-      const cx = box.x + box.w / 2, cy = box.y + box.h / 2, i = this.insets();
-      const vx = i.left + (this.c.clientWidth - i.left - i.right) / 2, vy = i.top + (this.c.clientHeight - i.top - i.bottom) / 2;
-      this.animTo(k, vx - cx * k, vy - cy * k);
+      const v = this.viewCenter();
+      const o = this.originFor(k, this.r, box.x + box.w / 2, box.y + box.h / 2, v.x, v.y);
+      this.animTo(k, o.x, o.y);
     }
 
-    animTo(k, x, y, dur) {
+    animTo(k, x, y, dur, r) {
       this.stopAnim();
-      const k0 = this.k, x0 = this.x, y0 = this.y, t0 = performance.now();
+      const k0 = this.k, x0 = this.x, y0 = this.y, r0 = this.r, t0 = performance.now();
+      if (r == null) r = r0;
+      let dr = r - r0; dr = ((dr + 180) % 360 + 360) % 360 - 180; // nejkratší směr otočení
       dur = dur || 750;
+      const finish = () => { this._raf = null; this.k = k; this.x = x; this.y = y; this.r = norm360(r0 + dr); this.apply(true); };
       const step = (now) => {
         const t = Math.min(1, (now - t0) / dur), e = ease(t);
-        this.k = k0 + (k - k0) * e; this.x = x0 + (x - x0) * e; this.y = y0 + (y - y0) * e;
+        if (t >= 1) return finish();
+        this.k = k0 + (k - k0) * e; this.x = x0 + (x - x0) * e; this.y = y0 + (y - y0) * e; this.r = r0 + dr * e;
         this.apply();
-        if (t < 1) this._raf = requestAnimationFrame(step);
+        this._raf = requestAnimationFrame(step);
       };
       this._raf = requestAnimationFrame(step);
       // pojistka: na kartě na pozadí prohlížeč animace pozastaví – dojet rovnou na cíl
       clearTimeout(this._animGuard);
-      this._animGuard = setTimeout(() => {
-        if (this._raf && this.k !== k) { cancelAnimationFrame(this._raf); this._raf = null; this.k = k; this.x = x; this.y = y; this.apply(); }
-      }, dur + 250);
+      this._animGuard = setTimeout(() => { if (this._raf) { cancelAnimationFrame(this._raf); finish(); } }, dur + 250);
     }
     stopAnim() { if (this._raf) cancelAnimationFrame(this._raf); this._raf = null; clearTimeout(this._animGuard); }
 
@@ -465,6 +614,12 @@
       }
     }
 
+    // bez pohybu šipek: omezený pohyb v systému, nebo úsporné vykreslení
+    still() {
+      const html = document.documentElement;
+      return html.classList.contains('lite') || (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    }
+
     // šipky po trase: stálý rozestup na obrazovce (~54 px) a plynulý pohyb ve směru chůze
     placeChevrons() {
       const R = this.route;
@@ -474,7 +629,7 @@
         R.samples = [];
         for (let l = 0; l <= R.len; l += 2) {
           const a = R.path.getPointAtLength(l), b = R.path.getPointAtLength(Math.min(R.len, l + 1.5));
-          R.samples.push([a.x, a.y, Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI]);
+          R.samples.push([a.x, a.y, Math.atan2(b.y - a.y, b.x - a.x) / RAD]);
         }
       }
       if (Math.abs(R.k - this.k) / this.k < 0.03 && R.nodes) return;
@@ -492,9 +647,8 @@
     moveChevrons(now) {
       const R = this.route;
       if (!R || !R.nodes) return;
-      const still = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       // rychlost ~32 px/s na obrazovce
-      const phase = still ? R.gap * 0.75 : ((now / 1000) * (32 / this.k)) % R.gap;
+      const phase = this.still() ? R.gap * 0.75 : ((now / 1000) * (32 / this.k)) % R.gap;
       const s = (1 / this.k).toFixed(4), S = R.samples, end = R.len - R.gap * 0.35;
       R.nodes.forEach((n, i) => {
         const l = phase + i * R.gap;
@@ -510,9 +664,11 @@
 
     startChevronLoop() {
       if (this._chevLoop) return;
+      let last = 0;
       const tick = (now) => {
         if (!this.route) { this._chevLoop = null; return; }
-        if (!document.documentElement.classList.contains('map-moving')) this.moveChevrons(now);
+        // ~30 snímků/s stačí (posun ~1 px na snímek) a překreslování SVG je poloviční
+        if (now - last >= 28 && !this.still() && !document.documentElement.classList.contains('map-moving')) { last = now; this.moveChevrons(now); }
         this._chevLoop = requestAnimationFrame(tick);
       };
       this._chevLoop = requestAnimationFrame(tick);
