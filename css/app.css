@@ -208,6 +208,13 @@ input, select { font: inherit; color: inherit; }
 .map-svg.dragging { cursor: grabbing; }
 /* překryvná vrstva s trasou a značkami: bez událostí ukazatele, překresluje se levně, hlavní mapa zůstává netknutá */
 .map-ov { pointer-events: none; cursor: default; }
+/* dlaždicový podklad: vrstva se jen transformuje (GPU), každá úroveň zoomu má vlastní div s dlaždicemi v px */
+.map-tiles { position: absolute; left: 0; top: 0; width: 0; height: 0; transform-origin: 0 0; will-change: transform; pointer-events: none; }
+.map-tiles > div { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.map-tiles canvas { position: absolute; display: block; }
+/* ztlumení podkladu při zvýraznění výsledků hledání */
+.dim { fill: var(--m-bg); opacity: 0; pointer-events: none; transition: opacity .25s; }
+.has-hits .dim { opacity: .45; }
 .map-svg.rotating { cursor: ew-resize; }
 /* výkon: tloušťky čar jsou v jednotkách mapy (dm); konstantní tloušťku na obrazovce má jen trasa a zvýraznění */
 .route path, .gr-hit, .gr-hover, .gr-sel { vector-effect: non-scaling-stroke; }

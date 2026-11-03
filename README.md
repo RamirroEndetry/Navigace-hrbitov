@@ -22,7 +22,7 @@ python -m http.server 5173 --bind 0.0.0.0
 - Skutečný půdorys hřbitova: 37 sekcí, 11 547 hrobů, chodníky, zdi, ploty, budovy, stromy, voda, koše, lavičky, kříže. Posun, zoom, pinch, otáčení, vrstvy, měřítko, čísla hrobů při přiblížení.
 - Otáčení mapy: dvěma prsty, myší pravým tlačítkem (nebo Ctrl/Shift + tažení), tlačítky ↺ ↻; klepnutí na kompas vrátí sever nahoru.
 - Denní a noční režim (slunce/měsíc v ovládání mapy, výchozí podle systému) a tři barevné vzory mapy: Přírodní, Čistá, Pergamen (ikona vrstev → Vzhled mapy). Volby se pamatují v zařízení.
-- Plynulý pohyb i na slabších zařízeních: během gesta se jen posouvá už vykreslený obraz (GPU), SVG se překresluje až po zastavení. Úsporné vykreslení (bez stínů a animací) se zapne samo na slabém zařízení nebo ručně v nabídce vrstev.
+- Plynulý pohyb i na slabších zařízeních: podklad mapy se kreslí do bitmapových dlaždic po úrovních zoomu (jen z geometrie v dané dlaždici, s pevným rozpočtem času na snímek), posun a zoom jen skládají hotové dlaždice na GPU. Trasa, značky a čísla hrobů jsou v lehkých SVG vrstvách. Úsporné vykreslení (bez stínů a animací) se zapne samo na slabém zařízení nebo ručně v nabídce vrstev.
 - Jedno chytré vyhledávací pole: jméno (bez diakritiky), rok úmrtí, datum `12. 4. 1987`, číslo hrobu `XII-28-93`, `sekce XIX-O`. Filtry podle sekce a rozsahu let.
 - Trasa ke každému hrobu po skutečných cestách (A* na mřížce 0,4 m), ze tří vchodů, krok za krokem se vzdáleností a časem chůze.
 - GPS poloha v telefonu (WGS84 → S-JTSK přes proj4).

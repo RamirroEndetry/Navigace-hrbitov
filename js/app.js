@@ -137,9 +137,7 @@
     onGrave: (g) => { if (!GUIDE) openGrave(g.id, { from: state.view === 'grave' ? state.from : state.view }); },
     onHover: showTip,
     onView: (k, r) => { updateScale(k); updateCompass(r); },
-    onPoi: openPoi,
-    // překreslení mapy je opakovaně pomalé → zapnout úsporné vykreslení (pokud si uživatel nevybral sám)
-    onSlow: () => { if (store.get('lite', null) == null && !html.classList.contains('lite')) { setLite(true, false); toast('Zapnuto úsporné vykreslení mapy pro plynulejší pohyb'); } }
+    onPoi: openPoi
   });
   map.setCandles(state.candles);
   if (KIOSK) map.youAreHere({ x: D.GATES.main.x + 60, y: D.GATES.main.y - 40 });
