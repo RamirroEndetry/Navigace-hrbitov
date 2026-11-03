@@ -3,7 +3,9 @@
 
    Výkon: během posunu, zoomu i otáčení se jen transformuje už vykreslený obraz (CSS transform na <svg>,
    skládá ho GPU bez překreslování tisíců cest). Skutečné překreslení SVG („commit“) proběhne až po
-   zastavení gesta, nebo když by se jinak objevil nevykreslený okraj či příliš rozmazaný obraz. */
+   zastavení gesta, nebo když by se jinak objevil nevykreslený okraj či příliš rozmazaný obraz.
+   Vše, co se hýbe (trasa se šipkami, pulzující cíl, špendlík, svíčky, poloha, zvýraznění), leží v druhé,
+   malé SVG vrstvě se stejnou transformací: její animace překreslují jen pár tvarů, velká mapa zůstává netknutá. */
 (function () {
   'use strict';
   const NS = 'http://www.w3.org/2000/svg';
@@ -60,6 +62,8 @@
       this.m = 0;
       this.scaled = [];
       this.svg = el('svg', { class: 'map-svg', role: 'application', 'aria-label': 'Interaktivní mapa hřbitova' }, container);
+      // překryvná vrstva pro vše pohyblivé (bez událostí ukazatele, ty chytá hlavní mapa)
+      this.ov = el('svg', { class: 'map-svg map-ov', 'aria-hidden': 'true' }, container);
       this.layout();
       this.build();
       this.bind();
@@ -78,10 +82,11 @@
     layout() {
       const cw = this.c.clientWidth, ch = this.c.clientHeight;
       this.m = Math.round(Math.min(cw, ch) * 0.2);
-      const s = this.svg.style;
-      s.left = s.top = -this.m + 'px';
-      s.width = cw + 2 * this.m + 'px'; s.height = ch + 2 * this.m + 'px';
-      s.transformOrigin = `${this.m}px ${this.m}px`;
+      for (const s of [this.svg.style, this.ov.style]) {
+        s.left = s.top = -this.m + 'px';
+        s.width = cw + 2 * this.m + 'px'; s.height = ch + 2 * this.m + 'px';
+        s.transformOrigin = `${this.m}px ${this.m}px`;
+      }
     }
 
     // ---------- Stavba scény ----------
@@ -92,7 +97,8 @@
         ${Object.entries(ICONS).map(([k, v]) => `<symbol id="i-${k}" viewBox="0 0 24 24">${v}</symbol>`).join('')}`;
 
       this.root = el('g', { class: 'root' }, svg);
-      const R = this.root, A = V.areas;
+      this.ovRoot = el('g', { class: 'root' }, this.ov);
+      const R = this.root, O = this.ovRoot, A = V.areas;
       const area = (cls, list, parent) => list && list.length && el('path', { d: polyD(list), class: 'a-' + cls, 'fill-rule': 'evenodd' }, parent || R);
       // stín = posunutá kopie sloučeného tvaru (bez SVG filtrů → rychlé)
       const shadowOf = (d, cls, dx, dy, parent) => el('path', { d, class: cls, transform: `translate(${dx} ${dy})`, 'fill-rule': 'evenodd' }, parent || R);
@@ -137,9 +143,10 @@
       }
       shadowOf(allG, 'gr-shadow', 1.3, 1.8, G);
       for (const key of [...GRAVE_CLASSES, 'volne']) if (buckets[key]) el('path', { d: buckets[key].join(''), class: 'gr gr-' + key }, G);
-      this.hitPath = el('path', { class: 'gr-hit', d: '' }, R);
-      this.hoverPath = el('path', { class: 'gr-hover', d: '' }, R);
-      this.selPath = el('path', { class: 'gr-sel', d: '' }, R);
+      // zvýraznění hrobů se mění při hledání a najetí myší → do překryvné vrstvy
+      this.hitPath = el('path', { class: 'gr-hit', d: '' }, O);
+      this.hoverPath = el('path', { class: 'gr-hover', d: '' }, O);
+      this.selPath = el('path', { class: 'gr-sel', d: '' }, O);
       this.numG = el('g', { class: 'nums' }, R);
 
       // stromy: stín, koruna a odlesk – vše sloučené do pár tvarů
@@ -156,7 +163,8 @@
       }
       for (const [k, cls] of [['shadow', 'tree-shadow'], ['bush', 'bush'], ['tree', 'tree'], ['treeHi', 'tree-hi'], ['conifer', 'tree conifer'], ['coniferHi', 'tree-hi conifer-hi']]) el('path', { d: parts[k], class: cls }, T);
 
-      this.routeG = el('g', { class: 'route' }, R);
+      // trasa (animace vykreslení, pohyb šipek, pulz cíle) → překryvná vrstva
+      this.routeG = el('g', { class: 'route' }, O);
       // POI
       this.poiG = el('g', { class: 'pois' }, R);
       d.pois.forEach((p, i) => {
@@ -194,7 +202,8 @@
         const t = el('text', { class: 'gate-t', x: x0 + w / 2, y: 4 }, g);
         t.textContent = lbl;
       }
-      this.markG = el('g', { class: 'marks' }, R);
+      // špendlík, svíčky, poloha, tečky výsledků (animované) → překryvná vrstva
+      this.markG = el('g', { class: 'marks' }, O);
     }
 
     marker(x, y, parent) {
@@ -399,7 +408,8 @@
       const c = this.cv, s = this.k / c.k, a = (this.r - c.r) * RAD;
       const cos = Math.cos(a) * s, sin = Math.sin(a) * s;
       const ex = this.x - (cos * c.x - sin * c.y), ey = this.y - (sin * c.x + cos * c.y);
-      this.svg.style.transform = `matrix(${cos.toFixed(5)},${sin.toFixed(5)},${(-sin).toFixed(5)},${cos.toFixed(5)},${ex.toFixed(2)},${ey.toFixed(2)})`;
+      const t = `matrix(${cos.toFixed(5)},${sin.toFixed(5)},${(-sin).toFixed(5)},${cos.toFixed(5)},${ex.toFixed(2)},${ey.toFixed(2)})`;
+      this.svg.style.transform = t; this.ov.style.transform = t;
     }
 
     // je potřeba skutečně překreslit? (příliš velká změna měřítka, nebo by byl vidět nevykreslený kraj)
@@ -422,8 +432,9 @@
     // skutečné překreslení SVG v aktuálním pohledu
     commit() {
       const m = this.m;
-      this.root.setAttribute('transform', `translate(${(this.x + m).toFixed(2)},${(this.y + m).toFixed(2)}) rotate(${this.r.toFixed(3)}) scale(${this.k.toFixed(5)})`);
-      this.svg.style.transform = '';
+      const t = `translate(${(this.x + m).toFixed(2)},${(this.y + m).toFixed(2)}) rotate(${this.r.toFixed(3)}) scale(${this.k.toFixed(5)})`;
+      this.root.setAttribute('transform', t); this.ovRoot.setAttribute('transform', t);
+      this.svg.style.transform = ''; this.ov.style.transform = '';
       this.cv = { x: this.x, y: this.y, k: this.k, r: this.r };
       // značky (POI, popisky, špendlík) mají stálou velikost a zůstávají vzpřímené
       if (this.k !== this._lastK || this.r !== this._lastR || this._mDirty) {
@@ -431,9 +442,11 @@
         const s = (1 / this.k).toFixed(5), rr = (-this.r).toFixed(2);
         for (const g of this.scaled) g.setAttribute('transform', `translate(${g.dataset.x},${g.dataset.y}) rotate(${rr}) scale(${s})`);
         const rel = this.k / this.fitK;
-        this.svg.classList.toggle('lod-mid', rel > 2.2);
-        this.svg.classList.toggle('lod-near', rel > 5);
-        this.svg.classList.toggle('lod-far', rel < 1.6);
+        for (const s of [this.svg, this.ov]) {
+          s.classList.toggle('lod-mid', rel > 2.2);
+          s.classList.toggle('lod-near', rel > 5);
+          s.classList.toggle('lod-far', rel < 1.6);
+        }
       }
       this.measure();
     }

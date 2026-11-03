@@ -206,6 +206,8 @@ input, select { font: inherit; color: inherit; }
 /* SVG je větší než výřez (okraj nastavuje map.js) a během gesta se jen transformuje jako celek – skládá ho GPU */
 .map-svg { position: absolute; display: block; touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; will-change: transform; backface-visibility: hidden; }
 .map-svg.dragging { cursor: grabbing; }
+/* překryvná vrstva s trasou a značkami: bez událostí ukazatele, překresluje se levně, hlavní mapa zůstává netknutá */
+.map-ov { pointer-events: none; cursor: default; }
 .map-svg.rotating { cursor: ew-resize; }
 /* výkon: tloušťky čar jsou v jednotkách mapy (dm); konstantní tloušťku na obrazovce má jen trasa a zvýraznění */
 .route path, .gr-hit, .gr-hover, .gr-sel { vector-effect: non-scaling-stroke; }
